@@ -30,7 +30,7 @@
   <cnt_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>64</LINE></cnt_pulse>
   <ctr_val><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>65</LINE></ctr_val>
   <ctr_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>66</LINE></ctr_pulse>
-  <start><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>245</LINE></start>
+  <start><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>240</LINE></start>
   <isr_timer1><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>82</LINE></isr_timer1>
   <isr_exit><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>101</LINE></isr_exit>
   <ini_ports><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>111</LINE></ini_ports>
@@ -38,42 +38,39 @@
   <update_leds><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>162</LINE></update_leds>
   <ul_mask_00><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>195</LINE></ul_mask_00>
   <ul_up><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>184</LINE></ul_up>
-  <ul_mask_08><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>203</LINE></ul_mask_08>
-  <ul_mask_0C><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>205</LINE></ul_mask_0C>
-  <ul_mask_0E><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>207</LINE></ul_mask_0E>
-  <ul_mask_0F><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>209</LINE></ul_mask_0F>
+  <ul_mask_08><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>199</LINE></ul_mask_08>
+  <ul_mask_04><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>201</LINE></ul_mask_04>
+  <ul_mask_02><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>203</LINE></ul_mask_02>
   <ul_mask_01><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>197</LINE></ul_mask_01>
-  <ul_mask_03><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>199</LINE></ul_mask_03>
-  <ul_mask_07><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>201</LINE></ul_mask_07>
-  <ul_apply><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>211</LINE></ul_apply>
-  <get_delay><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>221</LINE></get_delay>
-  <gd_250><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>231</LINE></gd_250>
-  <gd_500><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>235</LINE></gd_500>
-  <gd_1000><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>239</LINE></gd_1000>
-  <loop><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>289</LINE></loop>
-  <sw3_not_held><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>332</LINE></sw3_not_held>
-  <skip_sw3><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>383</LINE></skip_sw3>
-  <sw3_short><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>372</LINE></sw3_short>
-  <sw3_long><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>352</LINE></sw3_long>
-  <sw3_exit_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>365</LINE></sw3_exit_counter>
-  <skip_sw1><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>415</LINE></skip_sw1>
-  <sw1_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>400</LINE></sw1_counter>
-  <sw1_ctr_store><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>407</LINE></sw1_ctr_store>
-  <skip_sw2><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>427</LINE></skip_sw2>
-  <skip_sw4><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>438</LINE></skip_sw4>
-  <do_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>483</LINE></do_counter>
-  <no_idle><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>449</LINE></no_idle>
-  <check_heartbeat><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>560</LINE></check_heartbeat>
-  <no_seq_wait><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>466</LINE></no_seq_wait>
-  <seq_ok><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>475</LINE></seq_ok>
-  <ctr_check_off><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>512</LINE></ctr_check_off>
-  <ctr_next_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>526</LINE></ctr_next_pulse>
-  <ctr_restart_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>550</LINE></ctr_restart_pulse>
-  <hb_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>597</LINE></hb_counter>
-  <hb_check_off_normal><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>586</LINE></hb_check_off_normal>
-  <hb_check_reset><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>620</LINE></hb_check_reset>
-  <hb_on><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>608</LINE></hb_on>
-  <hb_off><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>614</LINE></hb_off>
-  <no_hb_reset><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>625</LINE></no_hb_reset>
+  <ul_apply><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>206</LINE></ul_apply>
+  <get_delay><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>216</LINE></get_delay>
+  <gd_250><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>226</LINE></gd_250>
+  <gd_500><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>230</LINE></gd_500>
+  <gd_1000><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>234</LINE></gd_1000>
+  <loop><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>284</LINE></loop>
+  <sw3_not_held><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>327</LINE></sw3_not_held>
+  <skip_sw3><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>378</LINE></skip_sw3>
+  <sw3_short><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>367</LINE></sw3_short>
+  <sw3_long><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>347</LINE></sw3_long>
+  <sw3_exit_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>360</LINE></sw3_exit_counter>
+  <skip_sw1><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>410</LINE></skip_sw1>
+  <sw1_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>395</LINE></sw1_counter>
+  <sw1_ctr_store><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>402</LINE></sw1_ctr_store>
+  <skip_sw2><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>422</LINE></skip_sw2>
+  <skip_sw4><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>433</LINE></skip_sw4>
+  <do_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>478</LINE></do_counter>
+  <no_idle><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>444</LINE></no_idle>
+  <check_heartbeat><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>555</LINE></check_heartbeat>
+  <no_seq_wait><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>461</LINE></no_seq_wait>
+  <seq_ok><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>470</LINE></seq_ok>
+  <ctr_check_off><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>507</LINE></ctr_check_off>
+  <ctr_next_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>521</LINE></ctr_next_pulse>
+  <ctr_restart_pulse><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>545</LINE></ctr_restart_pulse>
+  <hb_counter><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>592</LINE></hb_counter>
+  <hb_check_off_normal><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>581</LINE></hb_check_off_normal>
+  <hb_check_reset><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>615</LINE></hb_check_reset>
+  <hb_on><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>603</LINE></hb_on>
+  <hb_off><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>609</LINE></hb_off>
+  <no_hb_reset><FILE>D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm</FILE><LINE>620</LINE></no_hb_reset>
  </LABELS>
 </ASSEMBLER_INFO>

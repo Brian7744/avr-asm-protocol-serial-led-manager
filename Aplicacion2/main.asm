@@ -172,42 +172,37 @@ update_leds:
  
     ; STATE_DOWN
     cpi     pos, 0
-    breq    ul_mask_00
+    breq    ul_mask_00		;				= 0000
     cpi     pos, 1
-    breq    ul_mask_08
+    breq    ul_mask_08		;               = 1000
     cpi     pos, 2
-    breq    ul_mask_0C
+    breq    ul_mask_04		; 0x0C -> 0x04	= 0100
     cpi     pos, 3
-    breq    ul_mask_0E
-    rjmp    ul_mask_0F
+    breq    ul_mask_02		; 0x0E -> 0x02  = 0010
+    rjmp    ul_mask_01		; 0x0F -> 0x01	= 0001
  
 ul_up:
     cpi     pos, 0
-    breq    ul_mask_00
+    breq    ul_mask_00		;				= 0000
     cpi     pos, 1
-    breq    ul_mask_01
+    breq    ul_mask_01		;				= 0001
     cpi     pos, 2
-    breq    ul_mask_03
+    breq    ul_mask_02		; 0x03 -> 0x02  = 0010
     cpi     pos, 3
-    breq    ul_mask_07
-    rjmp    ul_mask_0F
+    breq    ul_mask_04		; 0x07 -> 0x04	= 0100
+    rjmp    ul_mask_08		; 0x0F -> 0x08  = 1000
  
 ul_mask_00: ldi w1, 0x00
     rjmp    ul_apply
 ul_mask_01: ldi w1, 0x01
     rjmp    ul_apply
-ul_mask_03: ldi w1, 0x03
-    rjmp    ul_apply
-ul_mask_07: ldi w1, 0x07
-    rjmp    ul_apply
 ul_mask_08: ldi w1, 0x08
     rjmp    ul_apply
-ul_mask_0C: ldi w1, 0x0C
+ul_mask_04: ldi w1, 0x04
     rjmp    ul_apply
-ul_mask_0E: ldi w1, 0x0E
+ul_mask_02: ldi w1, 0x02
     rjmp    ul_apply
-ul_mask_0F: ldi w1, 0x0F
- 
+
 ul_apply:
     or      w, w1
     mov     ledstate, w
