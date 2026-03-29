@@ -7,7 +7,7 @@
 #include <m328pdef.inc>
 
 ;**************************** Igualdades **************************************
-;.equ	BUFSIZETX = 32
+
 
 
 ; Etiquetas para los pines
@@ -38,6 +38,15 @@
 .equ    HB_PERIOD       = 30    ; 30 x 100ms = 3s período completo
 .equ    HB_PULSE        = 1     ; 1 x 100ms = 100ms duración del flash
 .equ    SW3_LIMIT        = 2000  ; 2000ms para considerar pulsación larga
+
+
+; UART — 115200 baud @ 16MHz con U2X0=1
+; UBRR = (16.000.000 / 8 / 115200) - 1 = 16
+.equ    UBRR_VAL        = 16
+
+; Comandos simples UART (provisorios, antes del protocolo)
+.equ    CMD_START_COUNTER = 'y'
+.equ    CMD_STOP_COUNTER  = 'n'
 
 ;****************** definiciones - nombres simbolicos *************************
 .def	w			= r16
@@ -76,9 +85,11 @@ ctr_pulse:  .byte 1     ; pulso actual mostrando en modo COUNTER
 ;	jmp	USART_RXC
 .org    0x34                    ; fin de tabla de vectores. Pregunta: Es necesario
 
-
-
 ;Servicio de interrupciones
+
+;-------------------------------------------------------------------
+; ISR Timer1 — ejecuta cada 1ms
+;-------------------------------------------------------------------
 isr_timer1:
     push    r28
     in      r28, SREG
@@ -107,7 +118,9 @@ isr_exit:
 
 
 ;**** Funciones ****
-
+;-------------------------------------------------------------------
+; ini_ports
+;-------------------------------------------------------------------
 ini_ports:
     ; cpnfiguracion de las salidas
 	ldi     w, (1<<LEDBUILTIN)|(1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
@@ -153,6 +166,23 @@ ini_timer1:
     sts     TCCR1B, w
     ret
 
+;-------------------------------------------------------------------
+; ini_USART0 — 115200 baud, 8N1, polling
+; Orden de configuración: UBRR0L ? UBRR0H ? UCSR0A ? UCSR0C ? UCSR0B
+; U2X0=1 (doble velocidad): UBRR = 16MHz / 8 / 115200 - 1 = 16
+;-------------------------------------------------------------------
+ini_USART0:
+    ldi     w, UBRR_VAL
+    sts     UBRR0L, w           ; baud rate low
+    clr     w
+    sts     UBRR0H, w           ; baud rate high = 0
+    ldi     w, (1<<U2X0)        ; doble velocidad
+    sts     UCSR0A, w
+    ldi     w, 0x06             ; 8N1: UCSZ01=1, UCSZ00=1
+    sts     UCSR0C, w
+    ldi     w, (1<<RXEN0)|(1<<TXEN0)  ; habilitar RX y TX, sin ISR
+    sts     UCSR0B, w
+    ret
 ;-------------------------------------------------------------------
 ; update_leds 
 ; Preserva LEDBUILTIN. Interpreta sysstate y pos.
@@ -236,6 +266,29 @@ gd_1000:
     ldi     r25, high(1000)
     ret
 
+;-------------------------------------------------------------------
+; enter_counter — lógica de entrada a modo COUNTER
+; (usada tanto desde SW3 largo como desde UART)
+;-------------------------------------------------------------------
+enter_counter:
+    ldi     sysstate, STATE_COUNTER
+    clr     w
+    sts     ctr_val,    w
+    sts     ctr_pulse,  w
+    sts     cnt_pulse,  w
+    sts     cnt_pulse+1,w
+    call    update_leds
+    ret
+
+;-------------------------------------------------------------------
+; exit_counter — lógica de salida de modo COUNTER ? IDLE
+;-------------------------------------------------------------------
+exit_counter:
+    ldi     sysstate, STATE_IDLE
+    clr     pos
+    call    update_leds
+    ret
+
 ;Like a main in C
 start:
     cli
@@ -276,96 +329,76 @@ start:
     andi    oldbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
 
     call    ini_timer1
+    call    ini_USART0
     sei                         ; habilitar interrupciones globales
 
 ;-------------------------------------------------------------------
 ; LOOP PRINCIPAL
 ;-------------------------------------------------------------------
 loop:
-    ;--- [1] Esperar flag_1ms (bit0 GPIOR0) -------------------------
+    ;--- [1] Esperar flag_1ms ----------------------------------------
     sbis    GPIOR0, BIT_1MS
     rjmp    loop
-    cbi     GPIOR0, BIT_1MS     ; consumir flag
- 
+    cbi     GPIOR0, BIT_1MS
+
     ;--- [2] Leer botones y detectar flancos -------------------------
     in      newbtn, PIND
     andi    newbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
- 
-    ; flancos descendentes (botón recién presionado)
+
     mov     w, newbtn
     com     w
-    and     w, oldbtn
- 
-    ; flancos ascendentes (botón recién soltado)
+    and     w, oldbtn           ; w  = flancos descendentes
+
     mov     w1, oldbtn
     com     w1
     and     w1, newbtn          ; w1 = flancos ascendentes
- 
-    ;--- [3] Manejar SW3 (lógica especial: corto vs largo) -----------
-    ; Si SW3 está presionado ahora ? incrementar cnt_sw3
+
+    ;--- [3] SW3: corto vs largo -------------------------------------
     mov     r24, newbtn
     com     r24
     andi    r24, (1<<SW3)
-    breq    sw3_not_held        ; SW3 no está presionado
- 
-    ; SW3 presionado: incrementar cnt_sw3 (saturar en SW3_LONG)
+    breq    sw3_not_held
+
     lds     r26, cnt_sw3
     lds     r27, cnt_sw3+1
     ldi     r24, low(SW3_LIMIT)
     ldi     r25, high(SW3_LIMIT)
     cp      r26, r24
     cpc     r27, r25
-    breq    sw3_not_held        ; ya llegó al límite, no incrementar más
+    breq    sw3_not_held
     ldi     r24, 1
     add     r26, r24
     clr     r24
     adc     r27, r24
     sts     cnt_sw3,   r26
     sts     cnt_sw3+1, r27
-    rjmp    sw3_not_held
- 
+
 sw3_not_held:
-    ; Flanco ascendente en SW3 ? evaluar duración
     sbrs    w1, SW3
-    rjmp    skip_sw3            ; no hubo flanco ascendente
- 
+    rjmp    skip_sw3
+
     lds     r26, cnt_sw3
     lds     r27, cnt_sw3+1
- 
-    ; Resetear cnt_sw3
     clr     r24
     sts     cnt_sw3,   r24
     sts     cnt_sw3+1, r24
- 
-    ; ¿Fue pulsación larga? (? 2000ms)
+
     ldi     r24, low(SW3_LIMIT)
     ldi     r25, high(SW3_LIMIT)
     cp      r26, r24
     cpc     r27, r25
-    brlo    sw3_short           ; fue corto
- 
+    brlo    sw3_short
+
 sw3_long:
-    ; Toggle modo COUNTER
     cpi     sysstate, STATE_COUNTER
-    breq    sw3_exit_counter
-    ; Entrar a modo COUNTER
-    ldi     sysstate, STATE_COUNTER
-    clr     w
-    sts     ctr_val,    w
-    sts     ctr_pulse,  w
-    sts     cnt_pulse,  w
-    sts     cnt_pulse+1,w
-    call    update_leds         ; apagar LEDs de secuencia
+    breq    sw3_do_exit
+    call    enter_counter
     rjmp    skip_sw3
-sw3_exit_counter:
-    ; Salir de modo COUNTER ? IDLE
-    ldi     sysstate, STATE_IDLE
-    clr     pos
-    call    update_leds
+sw3_do_exit:
+    call    exit_counter
     rjmp    skip_sw3
- 
+
 sw3_short:
-    ; Pulsación corta: STOP (solo si no está en modo COUNTER)
     cpi     sysstate, STATE_COUNTER
     breq    skip_sw3
     ldi     sysstate, STATE_IDLE
@@ -374,26 +407,24 @@ sw3_short:
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
     call    update_leds
- 
+
 skip_sw3:
- 
-    ;--- [4] SW1 ? depende del modo ---------------------------------
+
+    ;--- [4] SW1 -----------------------------------------------------
     sbrs    w, SW1
     rjmp    skip_sw1
- 
+
     cpi     sysstate, STATE_COUNTER
     breq    sw1_counter
- 
-    ; Modo normal: iniciar secuencia ascendente
+
     ldi     sysstate, STATE_UP
     clr     pos
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
     rjmp    skip_sw1
- 
+
 sw1_counter:
-    ; Modo contador: incrementar ctr_val (0?5?0)
     lds     w, ctr_val
     inc     w
     cpi     w, 6
@@ -401,15 +432,14 @@ sw1_counter:
     clr     w
 sw1_ctr_store:
     sts     ctr_val, w
-    ; Reiniciar visualización
     clr     w
     sts     ctr_pulse,  w
     sts     cnt_pulse,  w
     sts     cnt_pulse+1,w
- 
+
 skip_sw1:
- 
-    ;--- [5] SW2 ? secuencia descendente (solo modo normal) ---------
+
+    ;--- [5] SW2 -----------------------------------------------------
     sbrs    w, SW2
     rjmp    skip_sw2
     cpi     sysstate, STATE_COUNTER
@@ -420,8 +450,8 @@ skip_sw1:
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
 skip_sw2:
- 
-    ;--- [6] SW4 ? modificar tiempo (solo modo normal) --------------
+
+    ;--- [6] SW4 -----------------------------------------------------
     sbrs    w, SW4
     rjmp    skip_sw4
     cpi     sysstate, STATE_COUNTER
@@ -431,19 +461,46 @@ skip_sw2:
     brlo    skip_sw4
     clr     timeidx
 skip_sw4:
- 
+
     ;--- [7] Guardar estado botones ----------------------------------
     mov     oldbtn, newbtn
- 
-    ;--- [8] Lógica según estado del sistema -------------------------
+
+    ;--- [8] Procesar UART ------------------------------------------
+    ; Chequear RXC0 (bit 7 de UCSR0A) — hay byte disponible?
+    lds     r24, UCSR0A
+    sbrs    r24, RXC0
+    rjmp    skip_uart           ; no hay dato
+
+    ; Leer byte recibido
+    lds     r24, UDR0
+
+    ; ¿Es 'y'? ? entrar a modo contador
+    cpi     r24, CMD_START_COUNTER
+    brne    uart_check_n
+    cpi     sysstate, STATE_COUNTER
+    breq    skip_uart           ; ya está en modo contador, ignorar
+    call    enter_counter
+    rjmp    skip_uart
+
+uart_check_n:
+    ; ¿Es 'n'? ? salir de modo contador
+    cpi     r24, CMD_STOP_COUNTER
+    brne    skip_uart
+    cpi     sysstate, STATE_COUNTER
+    brne    skip_uart           ; no está en modo contador, ignorar
+    call    exit_counter
+
+skip_uart:
+
+    ;--- [9] Lógica según estado del sistema -------------------------
     cpi     sysstate, STATE_COUNTER
     breq    do_counter
     cpi     sysstate, STATE_IDLE
     brne    no_idle
     rjmp    check_heartbeat
 no_idle:
- 
-    ; ?? SEQ_UP o SEQ_DOWN ??
+
+    ; SEQ_UP o SEQ_DOWN
     lds     r26, cnt_seq
     lds     r27, cnt_seq+1
     ldi     w, 1
@@ -452,14 +509,14 @@ no_idle:
     adc     r27, w
     sts     cnt_seq,   r26
     sts     cnt_seq+1, r27
- 
+
     call    get_delay
     cp      r26, r24
     cpc     r27, r25
     brsh    no_seq_wait
     rjmp    check_heartbeat
 no_seq_wait:
- 
+
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
@@ -470,17 +527,13 @@ no_seq_wait:
 seq_ok:
     call    update_leds
     rjmp    check_heartbeat
- 
-    ; ?? MODO CONTADOR ??
-    ; Visualización: N pulsos de 200ms ON / 200ms OFF
-    ; Entre grupos: 500ms de pausa
-    ; Si ctr_val == 0 ? todos apagados
+
+    ; MODO CONTADOR
 do_counter:
     lds     w, ctr_val
     tst     w
-    breq    check_heartbeat     ; valor 0 ? LEDs apagados, no hacer nada
- 
-    ; Incrementar cnt_pulse
+    breq    check_heartbeat
+
     lds     r26, cnt_pulse
     lds     r27, cnt_pulse+1
     ldi     w, 1
@@ -489,74 +542,67 @@ do_counter:
     adc     r27, w
     sts     cnt_pulse,   r26
     sts     cnt_pulse+1, r27
- 
-    ; Fase ON: 0..199ms ? LEDs encendidos
+
+    ; Fase ON: 0..199ms
     ldi     r24, low(200)
     ldi     r25, high(200)
     cp      r26, r24
     cpc     r27, r25
     brsh    ctr_check_off
-    ; Encender todos los LEDs (preservar HB)
     mov     w, ledstate
     andi    w, (1<<LEDBUILTIN)
     ori     w, (1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
     mov     ledstate, w
     out     PORTB, ledstate
     rjmp    check_heartbeat
- 
+
 ctr_check_off:
-    ; Fase OFF: 200..399ms ? LEDs apagados
+    ; Fase OFF: 200..399ms
     ldi     r24, low(400)
     ldi     r25, high(400)
     cp      r26, r24
     cpc     r27, r25
     brsh    ctr_next_pulse
-    ; Apagar LEDs de secuencia (preservar HB)
     mov     w, ledstate
     andi    w, (1<<LEDBUILTIN)
     mov     ledstate, w
     out     PORTB, ledstate
     rjmp    check_heartbeat
- 
+
 ctr_next_pulse:
-    ; Terminó un ciclo ON/OFF de 400ms ? ver si hay más pulsos
     lds     w, ctr_pulse
     inc     w
     sts     ctr_pulse, w
     lds     r24, ctr_val
     cp      w, r24
-    brlo    ctr_restart_pulse   ; todavía quedan pulsos
- 
-    ; Terminaron todos los pulsos ? pausa de 500ms adicionales
-    ; cnt_pulse sigue corriendo hasta 400+500=900ms
+    brlo    ctr_restart_pulse
+
+    ; Pausa: 400..899ms
     ldi     r24, low(900)
     ldi     r25, high(900)
     cp      r26, r24
     cpc     r27, r25
-    brlo    check_heartbeat     ; en pausa
- 
-    ; Fin de pausa ? reiniciar secuencia de pulsos
+    brsh    no_hb_wait
+    rjmp    check_heartbeat
+no_hb_wait:
     clr     w
     sts     ctr_pulse,   w
     sts     cnt_pulse,   w
     sts     cnt_pulse+1, w
     rjmp    check_heartbeat
- 
+
 ctr_restart_pulse:
-    ; Reiniciar cnt_pulse para el siguiente pulso
     clr     w
     sts     cnt_pulse,   w
     sts     cnt_pulse+1, w
     rjmp    check_heartbeat
- 
-    ;--- [9] Heartbeat (flag_100ms) ----------------------------------
-    ; Modo normal:  1 flash de 100ms cada 3s
-    ; Modo counter: 2 flashes rápidos cada 3s
+
+    ;--- [10] Heartbeat (flag_100ms) ---------------------------------
 check_heartbeat:
     sbis    GPIOR0, BIT_100MS
     rjmp    loop
     cbi     GPIOR0, BIT_100MS
- 
+
     lds     r26, cnt_hb
     lds     r27, cnt_hb+1
     ldi     w, 1
@@ -565,30 +611,28 @@ check_heartbeat:
     adc     r27, w
     sts     cnt_hb,   r26
     sts     cnt_hb+1, r27
- 
+
     cpi     sysstate, STATE_COUNTER
     breq    hb_counter
- 
-    ; ?? Heartbeat modo normal: 1 flash en t=0, apagar en t=1 ??
+
+    ; Modo normal: 1 flash en t=1, apagar en t=2
     cpi     r26, 1
     brne    hb_check_off_normal
-    ; Encender LEDBUILTIN
     ldi     w, (1<<LEDBUILTIN)
     or      ledstate, w
     out     PORTB, ledstate
     rjmp    hb_check_reset
- 
+
 hb_check_off_normal:
     cpi     r26, 2
     brne    hb_check_reset
-    ; Apagar LEDBUILTIN
     mov     w, ledstate
     andi    w, ~(1<<LEDBUILTIN)
     mov     ledstate, w
     out     PORTB, ledstate
     rjmp    hb_check_reset
- 
-    ; ?? Heartbeat modo counter: 2 flashes (t=0 ON, t=1 OFF, t=2 ON, t=3 OFF) ??
+
+    ; Modo contador: 2 flashes (t=1 ON, t=2 OFF, t=3 ON, t=4 OFF)
 hb_counter:
     cpi     r26, 1
     breq    hb_on
@@ -599,21 +643,20 @@ hb_counter:
     cpi     r26, 4
     breq    hb_off
     rjmp    hb_check_reset
- 
+
 hb_on:
     ldi     w, (1<<LEDBUILTIN)
     or      ledstate, w
     out     PORTB, ledstate
     rjmp    hb_check_reset
- 
+
 hb_off:
     mov     w, ledstate
     andi    w, ~(1<<LEDBUILTIN)
     mov     ledstate, w
     out     PORTB, ledstate
- 
+
 hb_check_reset:
-    ; Resetear cnt_hb cada 30 x 100ms = 3s
     cpi     r26, HB_PERIOD
     brsh    no_hb_reset
     rjmp    loop
@@ -621,5 +664,4 @@ no_hb_reset:
     clr     w
     sts     cnt_hb,   w
     sts     cnt_hb+1, w
- 
     rjmp    loop
