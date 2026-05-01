@@ -38,19 +38,20 @@
 ; UART — 115200 baud @ 16MHz con U2X0=1
 .equ    UBRR_VAL        = 16
 
-; Protocolo 2 bytes: CMD + PARAM
-; Byte 1: letra de comando
-; Byte 2: parámetro ('0'..'4')
-; CR y LF se ignoran
-.equ    CMD_START_UP        = 'U'   ; U0 ? secuencia ascendente
-.equ    CMD_START_DOWN      = 'D'   ; D0 ? secuencia descendente
-.equ    CMD_STOP            = 'S'   ; S0 ? detener
-.equ    CMD_START_COUNTER   = 'C'   ; C0 ? modo contador
-.equ    CMD_STOP_COUNTER    = 'X'   ; X0 ? salir del contador
-.equ    CMD_LED_ON          = 'L'   ; L1..L4 ? encender LED
-.equ    CMD_LED_OFF         = 'F'   ; F1..F4 ? apagar LED
-.equ    CMD_ALL_OFF         = 'A'   ; A0 ? apagar todos
-.equ    CMD_SET_TIME        = 'T'   ; T0..T3 ? cambiar tiempo
+; Protocolo 8 bytes ASCII: S CMD P1 P2 P3 CHK_H CHK_L W
+.equ    PROTO_HEADER    = 'S'
+.equ    PROTO_TAIL      = 'W'
+.equ    PROTO_LEN       = 8
+
+.equ    CMD_START_UP        = 'U'
+.equ    CMD_START_DOWN      = 'D'
+.equ    CMD_STOP            = 'S'
+.equ    CMD_START_COUNTER   = 'C'
+.equ    CMD_STOP_COUNTER    = 'X'
+.equ    CMD_LED_ON          = 'L'
+.equ    CMD_LED_OFF         = 'F'
+.equ    CMD_ALL_OFF         = 'A'
+.equ    CMD_SET_TIME        = 'T'
 
 ;****************** definiciones - nombres simbolicos *************************
 .def    w           = r16
@@ -72,20 +73,93 @@ cnt_pulse:  .byte 2
 ctr_val:    .byte 1
 ctr_pulse:  .byte 1
 
-; Buffer protocolo 2 bytes
-rx_cmd:     .byte 1     ; byte de comando recibido
-rx_param:   .byte 1     ; byte de parámetro recibido
-rx_state:   .byte 1     ; 0=esperando CMD, 1=esperando PARAM, 2=listo
+; Buffer protocolo 8 bytes ASCII
+rx_buf:     .byte 8     ; S CMD P1 P2 P3 CHK_H CHK_L W
+rx_idx:     .byte 1     ; índice del próximo byte (0-7)
+rx_ready:   .byte 1     ; 1 = trama completa lista para procesar
 
 ;************************ segmento de Codigo **********************************
 .cseg
 .org    0x00
     jmp     start
 
-.org    0x1A                    ; TIMER1_COMPA vector
+.org    0x1A                     ; TIMER1_COMPA vector
     jmp     isr_timer1
 
+.org    0x24                     ; USART_RX vector
+    jmp     isr_uart_rx
+
 .org    0x34
+
+;-------------------------------------------------------------------
+; ISR USART_RX — Ejecuta automáticamente al recibir un byte
+;-------------------------------------------------------------------
+isr_uart_rx:
+    ; 1. Guardar contexto (¡Crítico en ASM!)
+    push    r24
+    in      r24, SREG
+    push    r24
+    push    r25
+    push    r26
+    push    r27
+    push    r28
+
+    ; 2. Leer dato del registro físico
+    lds     r24, UDR0
+
+    ; 3. Ignorar CR y LF
+    cpi     r24, 0x0D
+    breq    rx_isr_exit
+    cpi     r24, 0x0A
+    breq    rx_isr_exit
+
+    ; 4. Si rx_ready=1 (hay trama sin procesar), descartamos byte para no corromper
+    lds     r25, rx_ready
+    tst     r25
+    brne    rx_isr_exit
+
+    ; 5. Lógica de guardado
+    lds     r25, rx_idx
+
+    ; Si es primer byte, validar que sea el Header 'S'
+    tst     r25
+    brne    rx_isr_store
+    cpi     r24, PROTO_HEADER
+    brne    rx_isr_exit         ; No es 'S' -> se descarta
+
+rx_isr_store:
+    ; Guardar byte en rx_buf[rx_idx]
+    ldi     r26, low(rx_buf)
+    ldi     r27, high(rx_buf)
+    add     r26, r25
+    clr     r28
+    adc     r27, r28
+    st      X, r24
+
+    ; rx_idx++
+    inc     r25
+    sts     rx_idx, r25
+
+    ; Verificar si completamos la trama
+    cpi     r25, PROTO_LEN
+    brlo    rx_isr_exit
+
+    ; Trama lista -> setear bandera y reiniciar índice
+    ldi     r25, 1
+    sts     rx_ready, r25
+    clr     r25
+    sts     rx_idx, r25
+
+rx_isr_exit:
+    ; 6. Restaurar contexto
+    pop     r28
+    pop     r27
+    pop     r26
+    pop     r25
+    pop     r24
+    out     SREG, r24
+    pop     r24
+    reti
 
 ;-------------------------------------------------------------------
 ; ISR Timer1 — ejecuta cada 1ms
@@ -100,13 +174,13 @@ isr_timer1:
     lds     r28, cnt_100ms
     dec     r28
     sts     cnt_100ms, r28
-    brne    isr_exit
+    brne    isr_exit_t1
 
     ldi     r28, 100
     sts     cnt_100ms, r28
     sbi     GPIOR0, BIT_100MS
 
-isr_exit:
+isr_exit_t1:
     pop     r28
     out     SREG, r28
     pop     r28
@@ -148,7 +222,7 @@ ini_timer1:
     ret
 
 ;-------------------------------------------------------------------
-; ini_USART0 — 115200 baud, 8N1, polling
+; ini_USART0 — Habilitando RXCIE0 para Interrupciones
 ;-------------------------------------------------------------------
 ini_USART0:
     ldi     w, UBRR_VAL
@@ -159,7 +233,8 @@ ini_USART0:
     sts     UCSR0A, w
     ldi     w, 0x06
     sts     UCSR0C, w
-    ldi     w, (1<<RXEN0)|(1<<TXEN0)
+    ; ACA ACTIVAMOS LA INTERRUPCION DE RECEPCION (RXCIE0)
+    ldi     w, (1<<RXEN0)|(1<<TXEN0)|(1<<RXCIE0)
     sts     UCSR0B, w
     ret
 
@@ -291,9 +366,8 @@ start:
     sts     cnt_pulse+1,w
     sts     ctr_val,    w
     sts     ctr_pulse,  w
-    sts     rx_cmd,     w
-    sts     rx_param,   w
-    sts     rx_state,   w       ; 0 = esperando CMD
+    sts     rx_idx,     w
+    sts     rx_ready,   w
 
     clr     ledstate
     ldi     sysstate, STATE_IDLE
@@ -440,102 +514,137 @@ skip_sw4:
     ;--- [7] Guardar estado botones ----------------------------------
     mov     oldbtn, newbtn
 
-    ;--- [8] Procesar UART — protocolo 2 bytes -----------------------
-    ; Verificar si hay byte disponible
-    lds     r24, UCSR0A
-    sbrs    r24, RXC0
-    rjmp    skip_uart
-
-    ; Leer byte
-    lds     r24, UDR0
-
-    ; Filtrar CR (0x0D) y LF (0x0A)
-    cpi     r24, 0x0D
-    brne    uart_not_cr
-    rjmp    skip_uart
-uart_not_cr:
-    cpi     r24, 0x0A
-    brne    uart_not_lf
-    rjmp    skip_uart
-uart_not_lf:
-
-    ; ¿Estamos esperando CMD o PARAM?
-    lds     r25, rx_state
+    ;--- [8] Procesar protocolo (Los datos se cargan por Interrupción) ---
+    lds     r25, rx_ready
     tst     r25
-    brne    uart_got_param      ; rx_state=1 ? ya tenemos CMD, este es PARAM
+    brne    process_uart
+    jmp     skip_uart
+process_uart:
 
-    ; rx_state=0 ? este byte es el CMD
-    sts     rx_cmd,   r24      ; guardar CMD
-    ldi     r25, 1
-    sts     rx_state, r25      ; pasar a esperar PARAM
-    rjmp    skip_uart
+    ; --- Verificar TAIL (rx_buf[7]) ---
+    ldi     r26, low(rx_buf+7)
+    ldi     r27, high(rx_buf+7)
+    ld      r25, X
+    cpi     r25, PROTO_TAIL
+    breq    tail_ok
+    jmp     uart_discard
+tail_ok:
 
-uart_got_param:
-    ; Tenemos CMD y PARAM — ejecutar
-    sts     rx_param, r24      ; guardar PARAM
-    clr     r25
-    sts     rx_state, r25      ; resetear para próximo comando
+    ; --- Calcular checksum (SUMA): CMD + P1 + P2 + P3 ---
+    ldi     r26, low(rx_buf+1)
+    ldi     r27, high(rx_buf+1)
+    
+    ld      r24, X+             ; CMD
+    ld      r25, X+             
+    add     r24, r25            ; + P1
+    ld      r25, X+             
+    add     r24, r25            ; + P2
+    ld      r25, X+             
+    add     r24, r25            ; + P3 = CHK calculado
 
-    ; Convertir PARAM de ASCII a número
-    subi    r24, '0'            ; r24 = valor numérico del parámetro
-    lds     r25, rx_cmd         ; r25 = código de comando
+    ; Convertir r24 a 2 hex ASCII
+    mov     r25, r24
+    swap    r25
+    andi    r25, 0x0F
+    cpi     r25, 10
+    brlo    chk_h_digit
+    subi    r25, -('A'-10)
+    rjmp    chk_h_done
+chk_h_digit:
+    subi    r25, -'0'
+chk_h_done:
+    ldi     r26, low(rx_buf+5)
+    ldi     r27, high(rx_buf+5)
+    ld      r28, X
+    cp      r25, r28
+    breq    chk_h_ok
+    jmp     uart_discard
+chk_h_ok:
 
-    ; Despachar
-    cpi     r25, CMD_START_UP
-    brne    uart_dn
+    mov     r25, r24
+    andi    r25, 0x0F
+    cpi     r25, 10
+    brlo    chk_l_digit
+    subi    r25, -('A'-10)
+    rjmp    chk_l_done
+chk_l_digit:
+    subi    r25, -'0'
+chk_l_done:
+    ldi     r26, low(rx_buf+6)
+    ldi     r27, high(rx_buf+6)
+    ld      r28, X
+    cp      r25, r28
+    breq    chk_l_ok
+    jmp     uart_discard
+chk_l_ok:
+
+    ; --- Checksum OK ? leer CMD y P1 ---
+    ldi     r26, low(rx_buf+1)
+    ldi     r27, high(rx_buf+1)
+    ld      r24, X+             ; CMD
+    ld      r25, X              ; P1
+    subi    r25, '0'            ; Valor P1
+
+    ; Limpiar buffer (Liberar la interrupción para la prox trama)
+    clr     r28
+    sts     rx_ready, r28
+    sts     rx_idx,   r28
+
+    ; --- Despachar comando ---
+    cpi     r24, CMD_START_UP
+    brne    ucmd_dn
     ldi     sysstate, STATE_UP
     clr     pos
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_dn:
-    cpi     r25, CMD_START_DOWN
-    brne    uart_stop
+ucmd_dn:
+    cpi     r24, CMD_START_DOWN
+    brne    ucmd_stop
     ldi     sysstate, STATE_DOWN
     clr     pos
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_stop:
-    cpi     r25, CMD_STOP
-    brne    uart_cnt_on
+ucmd_stop:
+    cpi     r24, CMD_STOP
+    brne    ucmd_cnt_on
     ldi     sysstate, STATE_IDLE
     clr     pos
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
     call    update_leds
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_cnt_on:
-    cpi     r25, CMD_START_COUNTER
-    brne    uart_cnt_off
+ucmd_cnt_on:
+    cpi     r24, CMD_START_COUNTER
+    brne    ucmd_cnt_off
     call    enter_counter
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_cnt_off:
-    cpi     r25, CMD_STOP_COUNTER
-    brne    uart_led_on
+ucmd_cnt_off:
+    cpi     r24, CMD_STOP_COUNTER
+    brne    ucmd_led_on
     call    exit_counter
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_led_on:
-    cpi     r25, CMD_LED_ON
-    brne    uart_led_off
-    ; r24 = número de LED (1-4)
-    cpi     r24, 1
+ucmd_led_on:
+    cpi     r24, CMD_LED_ON
+    brne    ucmd_led_off
+    cpi     r25, 1
     breq    ulon_1
-    cpi     r24, 2
+    cpi     r25, 2
     breq    ulon_2
-    cpi     r24, 3
+    cpi     r25, 3
     breq    ulon_3
-    cpi     r24, 4
+    cpi     r25, 4
     breq    ulon_4
-    rjmp    skip_uart
+    jmp     skip_uart
 ulon_1: ldi w, (1<<LED1)
     rjmp    ulon_apply
 ulon_2: ldi w, (1<<LED2)
@@ -546,20 +655,20 @@ ulon_4: ldi w, (1<<LED4)
 ulon_apply:
     or      ledstate, w
     out     PORTB, ledstate
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_led_off:
-    cpi     r25, CMD_LED_OFF
-    brne    uart_all_off
-    cpi     r24, 1
+ucmd_led_off:
+    cpi     r24, CMD_LED_OFF
+    brne    ucmd_all_off
+    cpi     r25, 1
     breq    uloff_1
-    cpi     r24, 2
+    cpi     r25, 2
     breq    uloff_2
-    cpi     r24, 3
+    cpi     r25, 3
     breq    uloff_3
-    cpi     r24, 4
+    cpi     r25, 4
     breq    uloff_4
-    rjmp    skip_uart
+    jmp     skip_uart
 uloff_1: ldi w, ~(1<<LED1)
     rjmp    uloff_apply
 uloff_2: ldi w, ~(1<<LED2)
@@ -570,26 +679,32 @@ uloff_4: ldi w, ~(1<<LED4)
 uloff_apply:
     and     ledstate, w
     out     PORTB, ledstate
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_all_off:
-    cpi     r25, CMD_ALL_OFF
-    brne    uart_set_time
+ucmd_all_off:
+    cpi     r24, CMD_ALL_OFF
+    brne    ucmd_set_time
     ldi     sysstate, STATE_IDLE
     clr     pos
     clr     w
     sts     cnt_seq,   w
     sts     cnt_seq+1, w
     call    update_leds
-    rjmp    skip_uart
+    jmp     skip_uart
 
-uart_set_time:
-    cpi     r25, CMD_SET_TIME
-    brne    skip_uart
-    ; r24 = timeidx (0-3)
-    cpi     r24, 4
-    brsh    skip_uart           ; fuera de rango ? ignorar
-    mov     timeidx, r24
+ucmd_set_time:
+    cpi     r24, CMD_SET_TIME
+    brne    uart_discard
+    cpi     r25, 4
+    brsh    skip_uart_jmp
+    mov     timeidx, r25
+skip_uart_jmp:
+    jmp     skip_uart
+
+uart_discard:
+    clr     r28
+    sts     rx_ready, r28
+    sts     rx_idx,   r28
 
 skip_uart:
 

@@ -1,5 +1,5 @@
 
-AVRASM ver. 2.2.8  D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm Fri May 01 17:29:55 2026
+AVRASM ver. 2.2.8  D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm Fri May 01 18:49:34 2026
 
 [builtin](2): Including file 'C:/Program Files (x86)\Atmel\Studio\7.0\Packs\atmel\ATmega_DFP\1.7.374\avrasm\inc\m328Pdef.inc'
 D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm(7): Including file 'C:/Program Files (x86)\Atmel\Studio\7.0\Packs\atmel\ATmega_DFP\1.7.374\avrasm\inc\m328pdef.inc'
@@ -1069,19 +1069,20 @@ D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm(7): Including f
                                  ; UART — 115200 baud @ 16MHz con U2X0=1
                                  .equ    UBRR_VAL        = 16
                                  
-                                 ; Protocolo 2 bytes: CMD + PARAM
-                                 ; Byte 1: letra de comando
-                                 ; Byte 2: parámetro ('0'..'4')
-                                 ; CR y LF se ignoran
-                                 .equ    CMD_START_UP        = 'U'   ; U0 ? secuencia ascendente
-                                 .equ    CMD_START_DOWN      = 'D'   ; D0 ? secuencia descendente
-                                 .equ    CMD_STOP            = 'S'   ; S0 ? detener
-                                 .equ    CMD_START_COUNTER   = 'C'   ; C0 ? modo contador
-                                 .equ    CMD_STOP_COUNTER    = 'X'   ; X0 ? salir del contador
-                                 .equ    CMD_LED_ON          = 'L'   ; L1..L4 ? encender LED
-                                 .equ    CMD_LED_OFF         = 'F'   ; F1..F4 ? apagar LED
-                                 .equ    CMD_ALL_OFF         = 'A'   ; A0 ? apagar todos
-                                 .equ    CMD_SET_TIME        = 'T'   ; T0..T3 ? cambiar tiempo
+                                 ; Protocolo 8 bytes ASCII: S CMD P1 P2 P3 CHK_H CHK_L W
+                                 .equ    PROTO_HEADER    = 'S'
+                                 .equ    PROTO_TAIL      = 'W'
+                                 .equ    PROTO_LEN       = 8
+                                 
+                                 .equ    CMD_START_UP        = 'U'
+                                 .equ    CMD_START_DOWN      = 'D'
+                                 .equ    CMD_STOP            = 'S'
+                                 .equ    CMD_START_COUNTER   = 'C'
+                                 .equ    CMD_STOP_COUNTER    = 'X'
+                                 .equ    CMD_LED_ON          = 'L'
+                                 .equ    CMD_LED_OFF         = 'F'
+                                 .equ    CMD_ALL_OFF         = 'A'
+                                 .equ    CMD_SET_TIME        = 'T'
                                  
                                  ;****************** definiciones - nombres simbolicos *************************
                                  .def    w           = r16
@@ -1103,692 +1104,806 @@ D:\asmfiles\SecuenciaLEDrebuild\Aplicacion2\Aplicacion2\main.asm(7): Including f
 000109                           ctr_val:    .byte 1
 00010a                           ctr_pulse:  .byte 1
                                  
-                                 ; Buffer protocolo 2 bytes
-00010b                           rx_cmd:     .byte 1     ; byte de comando recibido
-00010c                           rx_param:   .byte 1     ; byte de parámetro recibido
-00010d                           rx_state:   .byte 1     ; 0=esperando CMD, 1=esperando PARAM, 2=listo
+                                 ; Buffer protocolo 8 bytes ASCII
+00010b                           rx_buf:     .byte 8     ; S CMD P1 P2 P3 CHK_H CHK_L W
+000113                           rx_idx:     .byte 1     ; índice del próximo byte (0-7)
+000114                           rx_ready:   .byte 1     ; 1 = trama completa lista para procesar
                                  
                                  ;************************ segmento de Codigo **********************************
                                  .cseg
                                  .org    0x00
-000000 940c 00c3                     jmp     start
+000000 940c 00f3                     jmp     start
                                  
-                                 .org    0x1A                    ; TIMER1_COMPA vector
-00001a 940c 0034                     jmp     isr_timer1
+                                 .org    0x1A                     ; TIMER1_COMPA vector
+00001a 940c 0064                     jmp     isr_timer1
+                                 
+                                 .org    0x24                     ; USART_RX vector
+000024 940c 0034                     jmp     isr_uart_rx
                                  
                                  .org    0x34
+                                 
+                                 ;-------------------------------------------------------------------
+                                 ; ISR USART_RX — Ejecuta automáticamente al recibir un byte
+                                 ;-------------------------------------------------------------------
+                                 isr_uart_rx:
+                                     ; 1. Guardar contexto (¡Crítico en ASM!)
+000034 938f                          push    r24
+000035 b78f                          in      r24, SREG
+000036 938f                          push    r24
+000037 939f                          push    r25
+000038 93af                          push    r26
+000039 93bf                          push    r27
+00003a 93cf                          push    r28
+                                 
+                                     ; 2. Leer dato del registro físico
+00003b 9180 00c6                     lds     r24, UDR0
+                                 
+                                     ; 3. Ignorar CR y LF
+00003d 308d                          cpi     r24, 0x0D
+00003e f0e9                          breq    rx_isr_exit
+00003f 308a                          cpi     r24, 0x0A
+000040 f0d9                          breq    rx_isr_exit
+                                 
+                                     ; 4. Si rx_ready=1 (hay trama sin procesar), descartamos byte para no corromper
+000041 9190 0114                     lds     r25, rx_ready
+000043 2399                          tst     r25
+000044 f4b9                          brne    rx_isr_exit
+                                 
+                                     ; 5. Lógica de guardado
+000045 9190 0113                     lds     r25, rx_idx
+                                 
+                                     ; Si es primer byte, validar que sea el Header 'S'
+000047 2399                          tst     r25
+000048 f411                          brne    rx_isr_store
+000049 3583                          cpi     r24, PROTO_HEADER
+00004a f489                          brne    rx_isr_exit         ; No es 'S' -> se descarta
+                                 
+                                 rx_isr_store:
+                                     ; Guardar byte en rx_buf[rx_idx]
+00004b e0ab                          ldi     r26, low(rx_buf)
+00004c e0b1                          ldi     r27, high(rx_buf)
+00004d 0fa9                          add     r26, r25
+00004e 27cc                          clr     r28
+00004f 1fbc                          adc     r27, r28
+000050 938c                          st      X, r24
+                                 
+                                     ; rx_idx++
+000051 9593                          inc     r25
+000052 9390 0113                     sts     rx_idx, r25
+                                 
+                                     ; Verificar si completamos la trama
+000054 3098                          cpi     r25, PROTO_LEN
+000055 f030                          brlo    rx_isr_exit
+                                 
+                                     ; Trama lista -> setear bandera y reiniciar índice
+000056 e091                          ldi     r25, 1
+000057 9390 0114                     sts     rx_ready, r25
+000059 2799                          clr     r25
+00005a 9390 0113                     sts     rx_idx, r25
+                                 
+                                 rx_isr_exit:
+                                     ; 6. Restaurar contexto
+00005c 91cf                          pop     r28
+00005d 91bf                          pop     r27
+00005e 91af                          pop     r26
+00005f 919f                          pop     r25
+000060 918f                          pop     r24
+000061 bf8f                          out     SREG, r24
+000062 918f                          pop     r24
+000063 9518                          reti
                                  
                                  ;-------------------------------------------------------------------
                                  ; ISR Timer1 — ejecuta cada 1ms
                                  ;-------------------------------------------------------------------
                                  isr_timer1:
-000034 93cf                          push    r28
-000035 b7cf                          in      r28, SREG
-000036 93cf                          push    r28
+000064 93cf                          push    r28
+000065 b7cf                          in      r28, SREG
+000066 93cf                          push    r28
                                  
-000037 9af0                          sbi     GPIOR0, BIT_1MS
+000067 9af0                          sbi     GPIOR0, BIT_1MS
                                  
-000038 91c0 0100                     lds     r28, cnt_100ms
-00003a 95ca                          dec     r28
-00003b 93c0 0100                     sts     cnt_100ms, r28
-00003d f421                          brne    isr_exit
+000068 91c0 0100                     lds     r28, cnt_100ms
+00006a 95ca                          dec     r28
+00006b 93c0 0100                     sts     cnt_100ms, r28
+00006d f421                          brne    isr_exit_t1
                                  
-00003e e6c4                          ldi     r28, 100
-00003f 93c0 0100                     sts     cnt_100ms, r28
-000041 9af1                          sbi     GPIOR0, BIT_100MS
+00006e e6c4                          ldi     r28, 100
+00006f 93c0 0100                     sts     cnt_100ms, r28
+000071 9af1                          sbi     GPIOR0, BIT_100MS
                                  
-                                 isr_exit:
-000042 91cf                          pop     r28
-000043 bfcf                          out     SREG, r28
-000044 91cf                          pop     r28
-000045 9518                          reti
+                                 isr_exit_t1:
+000072 91cf                          pop     r28
+000073 bfcf                          out     SREG, r28
+000074 91cf                          pop     r28
+000075 9518                          reti
                                  
                                  ;-------------------------------------------------------------------
                                  ; ini_ports
                                  ;-------------------------------------------------------------------
                                  ini_ports:
-000046 e20f                          ldi     w, (1<<LEDBUILTIN)|(1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
-000047 b904                          out     DDRB, w
-000048 e000                          ldi     w, 0
-000049 b905                          out     PORTB, w
-00004a e000                          ldi     w, 0
-00004b b90a                          out     DDRD, w
-00004c e30c                          ldi     w, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
-00004d b90b                          out     PORTD, w
-00004e 9508                          ret
+000076 e20f                          ldi     w, (1<<LEDBUILTIN)|(1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
+000077 b904                          out     DDRB, w
+000078 e000                          ldi     w, 0
+000079 b905                          out     PORTB, w
+00007a e000                          ldi     w, 0
+00007b b90a                          out     DDRD, w
+00007c e30c                          ldi     w, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
+00007d b90b                          out     PORTD, w
+00007e 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; ini_timer1
                                  ;-------------------------------------------------------------------
                                  ini_timer1:
-00004f 2700                          clr     w
-000050 9300 0081                     sts     TCCR1B, w
-000052 2700                          clr     w
-000053 9300 0080                     sts     TCCR1A, w
-000055 e000                          ldi     w, high(OCR1A_VAL)
-000056 9300 0089                     sts     OCR1AH, w
-000058 ef09                          ldi     w, low(OCR1A_VAL)
-000059 9300 0088                     sts     OCR1AL, w
-00005b 2700                          clr     w
-00005c 9300 0085                     sts     TCNT1H, w
-00005e 9300 0084                     sts     TCNT1L, w
-000060 e002                          ldi     w, (1<<OCIE1A)
-000061 9300 006f                     sts     TIMSK1, w
-000063 e00b                          ldi     w, (1<<WGM12)|(1<<CS11)|(1<<CS10)
-000064 9300 0081                     sts     TCCR1B, w
-000066 9508                          ret
+00007f 2700                          clr     w
+000080 9300 0081                     sts     TCCR1B, w
+000082 2700                          clr     w
+000083 9300 0080                     sts     TCCR1A, w
+000085 e000                          ldi     w, high(OCR1A_VAL)
+000086 9300 0089                     sts     OCR1AH, w
+000088 ef09                          ldi     w, low(OCR1A_VAL)
+000089 9300 0088                     sts     OCR1AL, w
+00008b 2700                          clr     w
+00008c 9300 0085                     sts     TCNT1H, w
+00008e 9300 0084                     sts     TCNT1L, w
+000090 e002                          ldi     w, (1<<OCIE1A)
+000091 9300 006f                     sts     TIMSK1, w
+000093 e00b                          ldi     w, (1<<WGM12)|(1<<CS11)|(1<<CS10)
+000094 9300 0081                     sts     TCCR1B, w
+000096 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
-                                 ; ini_USART0 — 115200 baud, 8N1, polling
+                                 ; ini_USART0 — Habilitando RXCIE0 para Interrupciones
                                  ;-------------------------------------------------------------------
                                  ini_USART0:
-000067 e100                          ldi     w, UBRR_VAL
-000068 9300 00c4                     sts     UBRR0L, w
-00006a 2700                          clr     w
-00006b 9300 00c5                     sts     UBRR0H, w
-00006d e002                          ldi     w, (1<<U2X0)
-00006e 9300 00c0                     sts     UCSR0A, w
-000070 e006                          ldi     w, 0x06
-000071 9300 00c2                     sts     UCSR0C, w
-000073 e108                          ldi     w, (1<<RXEN0)|(1<<TXEN0)
-000074 9300 00c1                     sts     UCSR0B, w
-000076 9508                          ret
+000097 e100                          ldi     w, UBRR_VAL
+000098 9300 00c4                     sts     UBRR0L, w
+00009a 2700                          clr     w
+00009b 9300 00c5                     sts     UBRR0H, w
+00009d e002                          ldi     w, (1<<U2X0)
+00009e 9300 00c0                     sts     UCSR0A, w
+0000a0 e006                          ldi     w, 0x06
+0000a1 9300 00c2                     sts     UCSR0C, w
+                                     ; ACA ACTIVAMOS LA INTERRUPCION DE RECEPCION (RXCIE0)
+0000a3 e908                          ldi     w, (1<<RXEN0)|(1<<TXEN0)|(1<<RXCIE0)
+0000a4 9300 00c1                     sts     UCSR0B, w
+0000a6 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; update_leds
                                  ;-------------------------------------------------------------------
                                  update_leds:
-000077 2f02                          mov     w, ledstate
-000078 7200                          andi    w, (1<<LEDBUILTIN)
+0000a7 2f02                          mov     w, ledstate
+0000a8 7200                          andi    w, (1<<LEDBUILTIN)
                                  
-000079 3030                          cpi     sysstate, STATE_IDLE
-00007a f0b1                          breq    ul_mask_00
-00007b 3033                          cpi     sysstate, STATE_COUNTER
-00007c f0a1                          breq    ul_mask_00
-00007d 3031                          cpi     sysstate, STATE_UP
-00007e f049                          breq    ul_up
+0000a9 3030                          cpi     sysstate, STATE_IDLE
+0000aa f0b1                          breq    ul_mask_00
+0000ab 3033                          cpi     sysstate, STATE_COUNTER
+0000ac f0a1                          breq    ul_mask_00
+0000ad 3031                          cpi     sysstate, STATE_UP
+0000ae f049                          breq    ul_up
                                  
                                      ; STATE_DOWN
-00007f 3040                          cpi     pos, 0
-000080 f081                          breq    ul_mask_00
-000081 3041                          cpi     pos, 1
-000082 f091                          breq    ul_mask_08
-000083 3042                          cpi     pos, 2
-000084 f091                          breq    ul_mask_04
-000085 3043                          cpi     pos, 3
-000086 f091                          breq    ul_mask_02
-000087 c00b                          rjmp    ul_mask_01
+0000af 3040                          cpi     pos, 0
+0000b0 f081                          breq    ul_mask_00
+0000b1 3041                          cpi     pos, 1
+0000b2 f091                          breq    ul_mask_08
+0000b3 3042                          cpi     pos, 2
+0000b4 f091                          breq    ul_mask_04
+0000b5 3043                          cpi     pos, 3
+0000b6 f091                          breq    ul_mask_02
+0000b7 c00b                          rjmp    ul_mask_01
                                  
                                  ul_up:
-000088 3040                          cpi     pos, 0
-000089 f039                          breq    ul_mask_00
-00008a 3041                          cpi     pos, 1
-00008b f039                          breq    ul_mask_01
-00008c 3042                          cpi     pos, 2
-00008d f059                          breq    ul_mask_02
-00008e 3043                          cpi     pos, 3
-00008f f039                          breq    ul_mask_04
-000090 c004                          rjmp    ul_mask_08
+0000b8 3040                          cpi     pos, 0
+0000b9 f039                          breq    ul_mask_00
+0000ba 3041                          cpi     pos, 1
+0000bb f039                          breq    ul_mask_01
+0000bc 3042                          cpi     pos, 2
+0000bd f059                          breq    ul_mask_02
+0000be 3043                          cpi     pos, 3
+0000bf f039                          breq    ul_mask_04
+0000c0 c004                          rjmp    ul_mask_08
                                  
-000091 e010                      ul_mask_00: ldi w1, 0x00
-000092 c008                          rjmp    ul_apply
-000093 e011                      ul_mask_01: ldi w1, 0x01
-000094 c006                          rjmp    ul_apply
-000095 e018                      ul_mask_08: ldi w1, 0x08
-000096 c004                          rjmp    ul_apply
-000097 e014                      ul_mask_04: ldi w1, 0x04
-000098 c002                          rjmp    ul_apply
-000099 e012                      ul_mask_02: ldi w1, 0x02
-00009a c000                          rjmp    ul_apply
+0000c1 e010                      ul_mask_00: ldi w1, 0x00
+0000c2 c008                          rjmp    ul_apply
+0000c3 e011                      ul_mask_01: ldi w1, 0x01
+0000c4 c006                          rjmp    ul_apply
+0000c5 e018                      ul_mask_08: ldi w1, 0x08
+0000c6 c004                          rjmp    ul_apply
+0000c7 e014                      ul_mask_04: ldi w1, 0x04
+0000c8 c002                          rjmp    ul_apply
+0000c9 e012                      ul_mask_02: ldi w1, 0x02
+0000ca c000                          rjmp    ul_apply
                                  
                                  ul_apply:
-00009b 2b01                          or      w, w1
-00009c 2f20                          mov     ledstate, w
-00009d b925                          out     PORTB, ledstate
-00009e 9508                          ret
+0000cb 2b01                          or      w, w1
+0000cc 2f20                          mov     ledstate, w
+0000cd b925                          out     PORTB, ledstate
+0000ce 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; get_delay
                                  ;-------------------------------------------------------------------
                                  get_delay:
-00009f 3050                          cpi     timeidx, 0
-0000a0 f039                          breq    gd_250
-0000a1 3051                          cpi     timeidx, 1
-0000a2 f041                          breq    gd_500
-0000a3 3052                          cpi     timeidx, 2
-0000a4 f049                          breq    gd_1000
-0000a5 ed80                          ldi     r24, low(2000)
-0000a6 e097                          ldi     r25, high(2000)
-0000a7 9508                          ret
+0000cf 3050                          cpi     timeidx, 0
+0000d0 f039                          breq    gd_250
+0000d1 3051                          cpi     timeidx, 1
+0000d2 f041                          breq    gd_500
+0000d3 3052                          cpi     timeidx, 2
+0000d4 f049                          breq    gd_1000
+0000d5 ed80                          ldi     r24, low(2000)
+0000d6 e097                          ldi     r25, high(2000)
+0000d7 9508                          ret
                                  gd_250:
-0000a8 ef8a                          ldi     r24, low(250)
-0000a9 e090                          ldi     r25, high(250)
-0000aa 9508                          ret
+0000d8 ef8a                          ldi     r24, low(250)
+0000d9 e090                          ldi     r25, high(250)
+0000da 9508                          ret
                                  gd_500:
-0000ab ef84                          ldi     r24, low(500)
-0000ac e091                          ldi     r25, high(500)
-0000ad 9508                          ret
+0000db ef84                          ldi     r24, low(500)
+0000dc e091                          ldi     r25, high(500)
+0000dd 9508                          ret
                                  gd_1000:
-0000ae ee88                          ldi     r24, low(1000)
-0000af e093                          ldi     r25, high(1000)
-0000b0 9508                          ret
+0000de ee88                          ldi     r24, low(1000)
+0000df e093                          ldi     r25, high(1000)
+0000e0 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; enter_counter
                                  ;-------------------------------------------------------------------
                                  enter_counter:
-0000b1 e033                          ldi     sysstate, STATE_COUNTER
-0000b2 2700                          clr     w
-0000b3 9300 0109                     sts     ctr_val,    w
-0000b5 9300 010a                     sts     ctr_pulse,  w
-0000b7 9300 0107                     sts     cnt_pulse,  w
-0000b9 9300 0108                     sts     cnt_pulse+1,w
-0000bb 940e 0077                     call    update_leds
-0000bd 9508                          ret
+0000e1 e033                          ldi     sysstate, STATE_COUNTER
+0000e2 2700                          clr     w
+0000e3 9300 0109                     sts     ctr_val,    w
+0000e5 9300 010a                     sts     ctr_pulse,  w
+0000e7 9300 0107                     sts     cnt_pulse,  w
+0000e9 9300 0108                     sts     cnt_pulse+1,w
+0000eb 940e 00a7                     call    update_leds
+0000ed 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; exit_counter
                                  ;-------------------------------------------------------------------
                                  exit_counter:
-0000be e030                          ldi     sysstate, STATE_IDLE
-0000bf 2744                          clr     pos
-0000c0 940e 0077                     call    update_leds
-0000c2 9508                          ret
+0000ee e030                          ldi     sysstate, STATE_IDLE
+0000ef 2744                          clr     pos
+0000f0 940e 00a7                     call    update_leds
+0000f2 9508                          ret
                                  
                                  ;-------------------------------------------------------------------
                                  ; start
                                  ;-------------------------------------------------------------------
                                  start:
-0000c3 94f8                          cli
-0000c4 ef0f                          ldi     w, low(RAMEND)
-0000c5 bf0d                          out     SPL, w
-0000c6 e008                          ldi     w, high(RAMEND)
-0000c7 bf0e                          out     SPH, w
+0000f3 94f8                          cli
+0000f4 ef0f                          ldi     w, low(RAMEND)
+0000f5 bf0d                          out     SPL, w
+0000f6 e008                          ldi     w, high(RAMEND)
+0000f7 bf0e                          out     SPH, w
                                  
-0000c8 940e 0046                     call    ini_ports
+0000f8 940e 0076                     call    ini_ports
                                  
-0000ca ba1e                          out     GPIOR0, r1
+0000fa ba1e                          out     GPIOR0, r1
                                  
-0000cb e604                          ldi     w, 100
-0000cc 9300 0100                     sts     cnt_100ms, w
-0000ce 2700                          clr     w
-0000cf 9300 0101                     sts     cnt_hb,     w
-0000d1 9300 0102                     sts     cnt_hb+1,   w
-0000d3 9300 0103                     sts     cnt_seq,    w
-0000d5 9300 0104                     sts     cnt_seq+1,  w
-0000d7 9300 0105                     sts     cnt_sw3,    w
-0000d9 9300 0106                     sts     cnt_sw3+1,  w
-0000db 9300 0107                     sts     cnt_pulse,  w
-0000dd 9300 0108                     sts     cnt_pulse+1,w
-0000df 9300 0109                     sts     ctr_val,    w
-0000e1 9300 010a                     sts     ctr_pulse,  w
-0000e3 9300 010b                     sts     rx_cmd,     w
-0000e5 9300 010c                     sts     rx_param,   w
-0000e7 9300 010d                     sts     rx_state,   w       ; 0 = esperando CMD
+0000fb e604                          ldi     w, 100
+0000fc 9300 0100                     sts     cnt_100ms, w
+0000fe 2700                          clr     w
+0000ff 9300 0101                     sts     cnt_hb,     w
+000101 9300 0102                     sts     cnt_hb+1,   w
+000103 9300 0103                     sts     cnt_seq,    w
+000105 9300 0104                     sts     cnt_seq+1,  w
+000107 9300 0105                     sts     cnt_sw3,    w
+000109 9300 0106                     sts     cnt_sw3+1,  w
+00010b 9300 0107                     sts     cnt_pulse,  w
+00010d 9300 0108                     sts     cnt_pulse+1,w
+00010f 9300 0109                     sts     ctr_val,    w
+000111 9300 010a                     sts     ctr_pulse,  w
+000113 9300 0113                     sts     rx_idx,     w
+000115 9300 0114                     sts     rx_ready,   w
                                  
-0000e9 2722                          clr     ledstate
-0000ea e030                          ldi     sysstate, STATE_IDLE
-0000eb 2744                          clr     pos
-0000ec e051                          ldi     timeidx, 1
+000117 2722                          clr     ledstate
+000118 e030                          ldi     sysstate, STATE_IDLE
+000119 2744                          clr     pos
+00011a e051                          ldi     timeidx, 1
                                  
-0000ed b169                          in      oldbtn, PIND
-0000ee 736c                          andi    oldbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
+00011b b169                          in      oldbtn, PIND
+00011c 736c                          andi    oldbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
                                  
-0000ef 940e 004f                     call    ini_timer1
-0000f1 940e 0067                     call    ini_USART0
-0000f3 9478                          sei
+00011d 940e 007f                     call    ini_timer1
+00011f 940e 0097                     call    ini_USART0
+000121 9478                          sei
                                  
                                  ;-------------------------------------------------------------------
                                  ; LOOP PRINCIPAL
                                  ;-------------------------------------------------------------------
                                  loop:
                                      ;--- [1] Esperar flag_1ms ----------------------------------------
-0000f4 9bf0                          sbis    GPIOR0, BIT_1MS
-0000f5 cffe                          rjmp    loop
-0000f6 98f0                          cbi     GPIOR0, BIT_1MS
+000122 9bf0                          sbis    GPIOR0, BIT_1MS
+000123 cffe                          rjmp    loop
+000124 98f0                          cbi     GPIOR0, BIT_1MS
                                  
                                      ;--- [2] Leer botones y detectar flancos -------------------------
-0000f7 b179                          in      newbtn, PIND
-0000f8 737c                          andi    newbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
+000125 b179                          in      newbtn, PIND
+000126 737c                          andi    newbtn, (1<<SW1)|(1<<SW2)|(1<<SW3)|(1<<SW4)
                                  
-0000f9 2f07                          mov     w, newbtn
-0000fa 9500                          com     w
-0000fb 2306                          and     w, oldbtn
+000127 2f07                          mov     w, newbtn
+000128 9500                          com     w
+000129 2306                          and     w, oldbtn
                                  
-0000fc 2f16                          mov     w1, oldbtn
-0000fd 9510                          com     w1
-0000fe 2317                          and     w1, newbtn
+00012a 2f16                          mov     w1, oldbtn
+00012b 9510                          com     w1
+00012c 2317                          and     w1, newbtn
                                  
                                      ;--- [3] SW3: corto vs largo -------------------------------------
-0000ff 2f87                          mov     r24, newbtn
-000100 9580                          com     r24
-000101 7180                          andi    r24, (1<<SW3)
-000102 f089                          breq    sw3_not_held
+00012d 2f87                          mov     r24, newbtn
+00012e 9580                          com     r24
+00012f 7180                          andi    r24, (1<<SW3)
+000130 f089                          breq    sw3_not_held
                                  
-000103 91a0 0105                     lds     r26, cnt_sw3
-000105 91b0 0106                     lds     r27, cnt_sw3+1
-000107 ed80                          ldi     r24, low(SW3_LIMIT)
-000108 e097                          ldi     r25, high(SW3_LIMIT)
-000109 17a8                          cp      r26, r24
-00010a 07b9                          cpc     r27, r25
-00010b f041                          breq    sw3_not_held
-00010c e081                          ldi     r24, 1
-00010d 0fa8                          add     r26, r24
-00010e 2788                          clr     r24
-00010f 1fb8                          adc     r27, r24
-000110 93a0 0105                     sts     cnt_sw3,   r26
-000112 93b0 0106                     sts     cnt_sw3+1, r27
+000131 91a0 0105                     lds     r26, cnt_sw3
+000133 91b0 0106                     lds     r27, cnt_sw3+1
+000135 ed80                          ldi     r24, low(SW3_LIMIT)
+000136 e097                          ldi     r25, high(SW3_LIMIT)
+000137 17a8                          cp      r26, r24
+000138 07b9                          cpc     r27, r25
+000139 f041                          breq    sw3_not_held
+00013a e081                          ldi     r24, 1
+00013b 0fa8                          add     r26, r24
+00013c 2788                          clr     r24
+00013d 1fb8                          adc     r27, r24
+00013e 93a0 0105                     sts     cnt_sw3,   r26
+000140 93b0 0106                     sts     cnt_sw3+1, r27
                                  
                                  sw3_not_held:
-000114 ff14                          sbrs    w1, SW3
-000115 c021                          rjmp    skip_sw3
+000142 ff14                          sbrs    w1, SW3
+000143 c021                          rjmp    skip_sw3
                                  
-000116 91a0 0105                     lds     r26, cnt_sw3
-000118 91b0 0106                     lds     r27, cnt_sw3+1
-00011a 2788                          clr     r24
-00011b 9380 0105                     sts     cnt_sw3,   r24
-00011d 9380 0106                     sts     cnt_sw3+1, r24
+000144 91a0 0105                     lds     r26, cnt_sw3
+000146 91b0 0106                     lds     r27, cnt_sw3+1
+000148 2788                          clr     r24
+000149 9380 0105                     sts     cnt_sw3,   r24
+00014b 9380 0106                     sts     cnt_sw3+1, r24
                                  
-00011f ed80                          ldi     r24, low(SW3_LIMIT)
-000120 e097                          ldi     r25, high(SW3_LIMIT)
-000121 17a8                          cp      r26, r24
-000122 07b9                          cpc     r27, r25
-000123 f040                          brlo    sw3_short
+00014d ed80                          ldi     r24, low(SW3_LIMIT)
+00014e e097                          ldi     r25, high(SW3_LIMIT)
+00014f 17a8                          cp      r26, r24
+000150 07b9                          cpc     r27, r25
+000151 f040                          brlo    sw3_short
                                  
                                  sw3_long:
-000124 3033                          cpi     sysstate, STATE_COUNTER
-000125 f019                          breq    sw3_do_exit
-000126 940e 00b1                     call    enter_counter
-000128 c00e                          rjmp    skip_sw3
+000152 3033                          cpi     sysstate, STATE_COUNTER
+000153 f019                          breq    sw3_do_exit
+000154 940e 00e1                     call    enter_counter
+000156 c00e                          rjmp    skip_sw3
                                  sw3_do_exit:
-000129 940e 00be                     call    exit_counter
-00012b c00b                          rjmp    skip_sw3
+000157 940e 00ee                     call    exit_counter
+000159 c00b                          rjmp    skip_sw3
                                  
                                  sw3_short:
-00012c 3033                          cpi     sysstate, STATE_COUNTER
-00012d f049                          breq    skip_sw3
-00012e e030                          ldi     sysstate, STATE_IDLE
-00012f 2744                          clr     pos
-000130 2700                          clr     w
-000131 9300 0103                     sts     cnt_seq,   w
-000133 9300 0104                     sts     cnt_seq+1, w
-000135 940e 0077                     call    update_leds
+00015a 3033                          cpi     sysstate, STATE_COUNTER
+00015b f049                          breq    skip_sw3
+00015c e030                          ldi     sysstate, STATE_IDLE
+00015d 2744                          clr     pos
+00015e 2700                          clr     w
+00015f 9300 0103                     sts     cnt_seq,   w
+000161 9300 0104                     sts     cnt_seq+1, w
+000163 940e 00a7                     call    update_leds
                                  
                                  skip_sw3:
                                  
                                      ;--- [4] SW1 -----------------------------------------------------
-000137 ff02                          sbrs    w, SW1
-000138 c019                          rjmp    skip_sw1
+000165 ff02                          sbrs    w, SW1
+000166 c019                          rjmp    skip_sw1
                                  
-000139 3033                          cpi     sysstate, STATE_COUNTER
-00013a f041                          breq    sw1_counter
+000167 3033                          cpi     sysstate, STATE_COUNTER
+000168 f041                          breq    sw1_counter
                                  
-00013b e031                          ldi     sysstate, STATE_UP
-00013c 2744                          clr     pos
-00013d 2700                          clr     w
-00013e 9300 0103                     sts     cnt_seq,   w
-000140 9300 0104                     sts     cnt_seq+1, w
-000142 c00f                          rjmp    skip_sw1
+000169 e031                          ldi     sysstate, STATE_UP
+00016a 2744                          clr     pos
+00016b 2700                          clr     w
+00016c 9300 0103                     sts     cnt_seq,   w
+00016e 9300 0104                     sts     cnt_seq+1, w
+000170 c00f                          rjmp    skip_sw1
                                  
                                  sw1_counter:
-000143 9100 0109                     lds     w, ctr_val
-000145 9503                          inc     w
-000146 3006                          cpi     w, 6
-000147 f008                          brlo    sw1_ctr_store
-000148 2700                          clr     w
+000171 9100 0109                     lds     w, ctr_val
+000173 9503                          inc     w
+000174 3006                          cpi     w, 6
+000175 f008                          brlo    sw1_ctr_store
+000176 2700                          clr     w
                                  sw1_ctr_store:
-000149 9300 0109                     sts     ctr_val, w
-00014b 2700                          clr     w
-00014c 9300 010a                     sts     ctr_pulse,  w
-00014e 9300 0107                     sts     cnt_pulse,  w
-000150 9300 0108                     sts     cnt_pulse+1,w
+000177 9300 0109                     sts     ctr_val, w
+000179 2700                          clr     w
+00017a 9300 010a                     sts     ctr_pulse,  w
+00017c 9300 0107                     sts     cnt_pulse,  w
+00017e 9300 0108                     sts     cnt_pulse+1,w
                                  
                                  skip_sw1:
                                  
                                      ;--- [5] SW2 -----------------------------------------------------
-000152 ff03                          sbrs    w, SW2
-000153 c009                          rjmp    skip_sw2
-000154 3033                          cpi     sysstate, STATE_COUNTER
-000155 f039                          breq    skip_sw2
-000156 e032                          ldi     sysstate, STATE_DOWN
-000157 2744                          clr     pos
-000158 2700                          clr     w
-000159 9300 0103                     sts     cnt_seq,   w
-00015b 9300 0104                     sts     cnt_seq+1, w
+000180 ff03                          sbrs    w, SW2
+000181 c009                          rjmp    skip_sw2
+000182 3033                          cpi     sysstate, STATE_COUNTER
+000183 f039                          breq    skip_sw2
+000184 e032                          ldi     sysstate, STATE_DOWN
+000185 2744                          clr     pos
+000186 2700                          clr     w
+000187 9300 0103                     sts     cnt_seq,   w
+000189 9300 0104                     sts     cnt_seq+1, w
                                  skip_sw2:
                                  
                                      ;--- [6] SW4 -----------------------------------------------------
-00015d ff05                          sbrs    w, SW4
-00015e c006                          rjmp    skip_sw4
-00015f 3033                          cpi     sysstate, STATE_COUNTER
-000160 f021                          breq    skip_sw4
-000161 9553                          inc     timeidx
-000162 3054                          cpi     timeidx, 4
-000163 f008                          brlo    skip_sw4
-000164 2755                          clr     timeidx
+00018b ff05                          sbrs    w, SW4
+00018c c006                          rjmp    skip_sw4
+00018d 3033                          cpi     sysstate, STATE_COUNTER
+00018e f021                          breq    skip_sw4
+00018f 9553                          inc     timeidx
+000190 3054                          cpi     timeidx, 4
+000191 f008                          brlo    skip_sw4
+000192 2755                          clr     timeidx
                                  skip_sw4:
                                  
                                      ;--- [7] Guardar estado botones ----------------------------------
-000165 2f67                          mov     oldbtn, newbtn
+000193 2f67                          mov     oldbtn, newbtn
                                  
-                                     ;--- [8] Procesar UART — protocolo 2 bytes -----------------------
-                                     ; Verificar si hay byte disponible
-000166 9180 00c0                     lds     r24, UCSR0A
-000168 ff87                          sbrs    r24, RXC0
-000169 c07f                          rjmp    skip_uart
+                                     ;--- [8] Procesar protocolo (Los datos se cargan por Interrupción) ---
+000194 9190 0114                     lds     r25, rx_ready
+000196 2399                          tst     r25
+000197 f411                          brne    process_uart
+000198 940c 0247                     jmp     skip_uart
+                                 process_uart:
                                  
-                                     ; Leer byte
-00016a 9180 00c6                     lds     r24, UDR0
+                                     ; --- Verificar TAIL (rx_buf[7]) ---
+00019a e1a2                          ldi     r26, low(rx_buf+7)
+00019b e0b1                          ldi     r27, high(rx_buf+7)
+00019c 919c                          ld      r25, X
+00019d 3597                          cpi     r25, PROTO_TAIL
+00019e f011                          breq    tail_ok
+00019f 940c 0242                     jmp     uart_discard
+                                 tail_ok:
                                  
-                                     ; Filtrar CR (0x0D) y LF (0x0A)
-00016c 308d                          cpi     r24, 0x0D
-00016d f409                          brne    uart_not_cr
-00016e c07a                          rjmp    skip_uart
-                                 uart_not_cr:
-00016f 308a                          cpi     r24, 0x0A
-000170 f409                          brne    uart_not_lf
-000171 c077                          rjmp    skip_uart
-                                 uart_not_lf:
+                                     ; --- Calcular checksum (SUMA): CMD + P1 + P2 + P3 ---
+0001a1 e0ac                          ldi     r26, low(rx_buf+1)
+0001a2 e0b1                          ldi     r27, high(rx_buf+1)
+                                     
+0001a3 918d                          ld      r24, X+             ; CMD
+0001a4 919d                          ld      r25, X+             
+0001a5 0f89                          add     r24, r25            ; + P1
+0001a6 919d                          ld      r25, X+             
+0001a7 0f89                          add     r24, r25            ; + P2
+0001a8 919d                          ld      r25, X+             
+0001a9 0f89                          add     r24, r25            ; + P3 = CHK calculado
                                  
-                                     ; ¿Estamos esperando CMD o PARAM?
-000172 9190 010d                     lds     r25, rx_state
-000174 2399                          tst     r25
-000175 f431                          brne    uart_got_param      ; rx_state=1 ? ya tenemos CMD, este es PARAM
+                                     ; Convertir r24 a 2 hex ASCII
+0001aa 2f98                          mov     r25, r24
+0001ab 9592                          swap    r25
+0001ac 709f                          andi    r25, 0x0F
+0001ad 309a                          cpi     r25, 10
+0001ae f010                          brlo    chk_h_digit
+0001af 5c99                          subi    r25, -('A'-10)
+0001b0 c001                          rjmp    chk_h_done
+                                 chk_h_digit:
+0001b1 5d90                          subi    r25, -'0'
+                                 chk_h_done:
+0001b2 e1a0                          ldi     r26, low(rx_buf+5)
+0001b3 e0b1                          ldi     r27, high(rx_buf+5)
+0001b4 91cc                          ld      r28, X
+0001b5 179c                          cp      r25, r28
+0001b6 f011                          breq    chk_h_ok
+0001b7 940c 0242                     jmp     uart_discard
+                                 chk_h_ok:
                                  
-                                     ; rx_state=0 ? este byte es el CMD
-000176 9380 010b                     sts     rx_cmd,   r24      ; guardar CMD
-000178 e091                          ldi     r25, 1
-000179 9390 010d                     sts     rx_state, r25      ; pasar a esperar PARAM
-00017b c06d                          rjmp    skip_uart
+0001b9 2f98                          mov     r25, r24
+0001ba 709f                          andi    r25, 0x0F
+0001bb 309a                          cpi     r25, 10
+0001bc f010                          brlo    chk_l_digit
+0001bd 5c99                          subi    r25, -('A'-10)
+0001be c001                          rjmp    chk_l_done
+                                 chk_l_digit:
+0001bf 5d90                          subi    r25, -'0'
+                                 chk_l_done:
+0001c0 e1a1                          ldi     r26, low(rx_buf+6)
+0001c1 e0b1                          ldi     r27, high(rx_buf+6)
+0001c2 91cc                          ld      r28, X
+0001c3 179c                          cp      r25, r28
+0001c4 f011                          breq    chk_l_ok
+0001c5 940c 0242                     jmp     uart_discard
+                                 chk_l_ok:
                                  
-                                 uart_got_param:
-                                     ; Tenemos CMD y PARAM — ejecutar
-00017c 9380 010c                     sts     rx_param, r24      ; guardar PARAM
-00017e 2799                          clr     r25
-00017f 9390 010d                     sts     rx_state, r25      ; resetear para próximo comando
+                                     ; --- Checksum OK ? leer CMD y P1 ---
+0001c7 e0ac                          ldi     r26, low(rx_buf+1)
+0001c8 e0b1                          ldi     r27, high(rx_buf+1)
+0001c9 918d                          ld      r24, X+             ; CMD
+0001ca 919c                          ld      r25, X              ; P1
+0001cb 5390                          subi    r25, '0'            ; Valor P1
                                  
-                                     ; Convertir PARAM de ASCII a número
-000181 5380                          subi    r24, '0'            ; r24 = valor numérico del parámetro
-000182 9190 010b                     lds     r25, rx_cmd         ; r25 = código de comando
+                                     ; Limpiar buffer (Liberar la interrupción para la prox trama)
+0001cc 27cc                          clr     r28
+0001cd 93c0 0114                     sts     rx_ready, r28
+0001cf 93c0 0113                     sts     rx_idx,   r28
                                  
-                                     ; Despachar
-000184 3595                          cpi     r25, CMD_START_UP
-000185 f441                          brne    uart_dn
-000186 e031                          ldi     sysstate, STATE_UP
-000187 2744                          clr     pos
-000188 2700                          clr     w
-000189 9300 0103                     sts     cnt_seq,   w
-00018b 9300 0104                     sts     cnt_seq+1, w
-00018d c05b                          rjmp    skip_uart
+                                     ; --- Despachar comando ---
+0001d1 3585                          cpi     r24, CMD_START_UP
+0001d2 f449                          brne    ucmd_dn
+0001d3 e031                          ldi     sysstate, STATE_UP
+0001d4 2744                          clr     pos
+0001d5 2700                          clr     w
+0001d6 9300 0103                     sts     cnt_seq,   w
+0001d8 9300 0104                     sts     cnt_seq+1, w
+0001da 940c 0247                     jmp     skip_uart
                                  
-                                 uart_dn:
-00018e 3494                          cpi     r25, CMD_START_DOWN
-00018f f441                          brne    uart_stop
-000190 e032                          ldi     sysstate, STATE_DOWN
-000191 2744                          clr     pos
-000192 2700                          clr     w
-000193 9300 0103                     sts     cnt_seq,   w
-000195 9300 0104                     sts     cnt_seq+1, w
-000197 c051                          rjmp    skip_uart
+                                 ucmd_dn:
+0001dc 3484                          cpi     r24, CMD_START_DOWN
+0001dd f449                          brne    ucmd_stop
+0001de e032                          ldi     sysstate, STATE_DOWN
+0001df 2744                          clr     pos
+0001e0 2700                          clr     w
+0001e1 9300 0103                     sts     cnt_seq,   w
+0001e3 9300 0104                     sts     cnt_seq+1, w
+0001e5 940c 0247                     jmp     skip_uart
                                  
-                                 uart_stop:
-000198 3593                          cpi     r25, CMD_STOP
-000199 f451                          brne    uart_cnt_on
-00019a e030                          ldi     sysstate, STATE_IDLE
-00019b 2744                          clr     pos
-00019c 2700                          clr     w
-00019d 9300 0103                     sts     cnt_seq,   w
-00019f 9300 0104                     sts     cnt_seq+1, w
-0001a1 940e 0077                     call    update_leds
-0001a3 c045                          rjmp    skip_uart
+                                 ucmd_stop:
+0001e7 3583                          cpi     r24, CMD_STOP
+0001e8 f459                          brne    ucmd_cnt_on
+0001e9 e030                          ldi     sysstate, STATE_IDLE
+0001ea 2744                          clr     pos
+0001eb 2700                          clr     w
+0001ec 9300 0103                     sts     cnt_seq,   w
+0001ee 9300 0104                     sts     cnt_seq+1, w
+0001f0 940e 00a7                     call    update_leds
+0001f2 940c 0247                     jmp     skip_uart
                                  
-                                 uart_cnt_on:
-0001a4 3493                          cpi     r25, CMD_START_COUNTER
-0001a5 f419                          brne    uart_cnt_off
-0001a6 940e 00b1                     call    enter_counter
-0001a8 c040                          rjmp    skip_uart
+                                 ucmd_cnt_on:
+0001f4 3483                          cpi     r24, CMD_START_COUNTER
+0001f5 f421                          brne    ucmd_cnt_off
+0001f6 940e 00e1                     call    enter_counter
+0001f8 940c 0247                     jmp     skip_uart
                                  
-                                 uart_cnt_off:
-0001a9 3598                          cpi     r25, CMD_STOP_COUNTER
-0001aa f419                          brne    uart_led_on
-0001ab 940e 00be                     call    exit_counter
-0001ad c03b                          rjmp    skip_uart
+                                 ucmd_cnt_off:
+0001fa 3588                          cpi     r24, CMD_STOP_COUNTER
+0001fb f421                          brne    ucmd_led_on
+0001fc 940e 00ee                     call    exit_counter
+0001fe 940c 0247                     jmp     skip_uart
                                  
-                                 uart_led_on:
-0001ae 349c                          cpi     r25, CMD_LED_ON
-0001af f499                          brne    uart_led_off
-                                     ; r24 = número de LED (1-4)
-0001b0 3081                          cpi     r24, 1
-0001b1 f039                          breq    ulon_1
-0001b2 3082                          cpi     r24, 2
-0001b3 f039                          breq    ulon_2
-0001b4 3083                          cpi     r24, 3
-0001b5 f039                          breq    ulon_3
-0001b6 3084                          cpi     r24, 4
-0001b7 f039                          breq    ulon_4
-0001b8 c030                          rjmp    skip_uart
-0001b9 e001                      ulon_1: ldi w, (1<<LED1)
-0001ba c005                          rjmp    ulon_apply
-0001bb e002                      ulon_2: ldi w, (1<<LED2)
-0001bc c003                          rjmp    ulon_apply
-0001bd e004                      ulon_3: ldi w, (1<<LED3)
-0001be c001                          rjmp    ulon_apply
-0001bf e008                      ulon_4: ldi w, (1<<LED4)
+                                 ucmd_led_on:
+000200 348c                          cpi     r24, CMD_LED_ON
+000201 f4a9                          brne    ucmd_led_off
+000202 3091                          cpi     r25, 1
+000203 f041                          breq    ulon_1
+000204 3092                          cpi     r25, 2
+000205 f041                          breq    ulon_2
+000206 3093                          cpi     r25, 3
+000207 f041                          breq    ulon_3
+000208 3094                          cpi     r25, 4
+000209 f041                          breq    ulon_4
+00020a 940c 0247                     jmp     skip_uart
+00020c e001                      ulon_1: ldi w, (1<<LED1)
+00020d c005                          rjmp    ulon_apply
+00020e e002                      ulon_2: ldi w, (1<<LED2)
+00020f c003                          rjmp    ulon_apply
+000210 e004                      ulon_3: ldi w, (1<<LED3)
+000211 c001                          rjmp    ulon_apply
+000212 e008                      ulon_4: ldi w, (1<<LED4)
                                  ulon_apply:
-0001c0 2b20                          or      ledstate, w
-0001c1 b925                          out     PORTB, ledstate
-0001c2 c026                          rjmp    skip_uart
+000213 2b20                          or      ledstate, w
+000214 b925                          out     PORTB, ledstate
+000215 940c 0247                     jmp     skip_uart
                                  
-                                 uart_led_off:
-0001c3 3496                          cpi     r25, CMD_LED_OFF
-0001c4 f499                          brne    uart_all_off
-0001c5 3081                          cpi     r24, 1
-0001c6 f039                          breq    uloff_1
-0001c7 3082                          cpi     r24, 2
-0001c8 f039                          breq    uloff_2
-0001c9 3083                          cpi     r24, 3
-0001ca f039                          breq    uloff_3
-0001cb 3084                          cpi     r24, 4
-0001cc f039                          breq    uloff_4
-0001cd c01b                          rjmp    skip_uart
-0001ce ef0e                      uloff_1: ldi w, ~(1<<LED1)
-0001cf c005                          rjmp    uloff_apply
-0001d0 ef0d                      uloff_2: ldi w, ~(1<<LED2)
-0001d1 c003                          rjmp    uloff_apply
-0001d2 ef0b                      uloff_3: ldi w, ~(1<<LED3)
-0001d3 c001                          rjmp    uloff_apply
-0001d4 ef07                      uloff_4: ldi w, ~(1<<LED4)
+                                 ucmd_led_off:
+000217 3486                          cpi     r24, CMD_LED_OFF
+000218 f4a9                          brne    ucmd_all_off
+000219 3091                          cpi     r25, 1
+00021a f041                          breq    uloff_1
+00021b 3092                          cpi     r25, 2
+00021c f041                          breq    uloff_2
+00021d 3093                          cpi     r25, 3
+00021e f041                          breq    uloff_3
+00021f 3094                          cpi     r25, 4
+000220 f041                          breq    uloff_4
+000221 940c 0247                     jmp     skip_uart
+000223 ef0e                      uloff_1: ldi w, ~(1<<LED1)
+000224 c005                          rjmp    uloff_apply
+000225 ef0d                      uloff_2: ldi w, ~(1<<LED2)
+000226 c003                          rjmp    uloff_apply
+000227 ef0b                      uloff_3: ldi w, ~(1<<LED3)
+000228 c001                          rjmp    uloff_apply
+000229 ef07                      uloff_4: ldi w, ~(1<<LED4)
                                  uloff_apply:
-0001d5 2320                          and     ledstate, w
-0001d6 b925                          out     PORTB, ledstate
-0001d7 c011                          rjmp    skip_uart
+00022a 2320                          and     ledstate, w
+00022b b925                          out     PORTB, ledstate
+00022c 940c 0247                     jmp     skip_uart
                                  
-                                 uart_all_off:
-0001d8 3491                          cpi     r25, CMD_ALL_OFF
-0001d9 f451                          brne    uart_set_time
-0001da e030                          ldi     sysstate, STATE_IDLE
-0001db 2744                          clr     pos
-0001dc 2700                          clr     w
-0001dd 9300 0103                     sts     cnt_seq,   w
-0001df 9300 0104                     sts     cnt_seq+1, w
-0001e1 940e 0077                     call    update_leds
-0001e3 c005                          rjmp    skip_uart
+                                 ucmd_all_off:
+00022e 3481                          cpi     r24, CMD_ALL_OFF
+00022f f459                          brne    ucmd_set_time
+000230 e030                          ldi     sysstate, STATE_IDLE
+000231 2744                          clr     pos
+000232 2700                          clr     w
+000233 9300 0103                     sts     cnt_seq,   w
+000235 9300 0104                     sts     cnt_seq+1, w
+000237 940e 00a7                     call    update_leds
+000239 940c 0247                     jmp     skip_uart
                                  
-                                 uart_set_time:
-0001e4 3594                          cpi     r25, CMD_SET_TIME
-0001e5 f419                          brne    skip_uart
-                                     ; r24 = timeidx (0-3)
-0001e6 3084                          cpi     r24, 4
-0001e7 f408                          brsh    skip_uart           ; fuera de rango ? ignorar
-0001e8 2f58                          mov     timeidx, r24
+                                 ucmd_set_time:
+00023b 3584                          cpi     r24, CMD_SET_TIME
+00023c f429                          brne    uart_discard
+00023d 3094                          cpi     r25, 4
+00023e f408                          brsh    skip_uart_jmp
+00023f 2f59                          mov     timeidx, r25
+                                 skip_uart_jmp:
+000240 940c 0247                     jmp     skip_uart
+                                 
+                                 uart_discard:
+000242 27cc                          clr     r28
+000243 93c0 0114                     sts     rx_ready, r28
+000245 93c0 0113                     sts     rx_idx,   r28
                                  
                                  skip_uart:
                                  
                                      ;--- [9] Lógica según estado del sistema -------------------------
-0001e9 3033                          cpi     sysstate, STATE_COUNTER
-0001ea f109                          breq    do_counter
-0001eb 3030                          cpi     sysstate, STATE_IDLE
-0001ec f409                          brne    no_idle
-0001ed c060                          rjmp    check_heartbeat
+000247 3033                          cpi     sysstate, STATE_COUNTER
+000248 f109                          breq    do_counter
+000249 3030                          cpi     sysstate, STATE_IDLE
+00024a f409                          brne    no_idle
+00024b c060                          rjmp    check_heartbeat
                                  no_idle:
                                  
-0001ee 91a0 0103                     lds     r26, cnt_seq
-0001f0 91b0 0104                     lds     r27, cnt_seq+1
-0001f2 e001                          ldi     w, 1
-0001f3 0fa0                          add     r26, w
-0001f4 2700                          clr     w
-0001f5 1fb0                          adc     r27, w
-0001f6 93a0 0103                     sts     cnt_seq,   r26
-0001f8 93b0 0104                     sts     cnt_seq+1, r27
+00024c 91a0 0103                     lds     r26, cnt_seq
+00024e 91b0 0104                     lds     r27, cnt_seq+1
+000250 e001                          ldi     w, 1
+000251 0fa0                          add     r26, w
+000252 2700                          clr     w
+000253 1fb0                          adc     r27, w
+000254 93a0 0103                     sts     cnt_seq,   r26
+000256 93b0 0104                     sts     cnt_seq+1, r27
                                  
-0001fa 940e 009f                     call    get_delay
-0001fc 17a8                          cp      r26, r24
-0001fd 07b9                          cpc     r27, r25
-0001fe f408                          brsh    no_seq_wait
-0001ff c04e                          rjmp    check_heartbeat
+000258 940e 00cf                     call    get_delay
+00025a 17a8                          cp      r26, r24
+00025b 07b9                          cpc     r27, r25
+00025c f408                          brsh    no_seq_wait
+00025d c04e                          rjmp    check_heartbeat
                                  no_seq_wait:
                                  
-000200 2700                          clr     w
-000201 9300 0103                     sts     cnt_seq,   w
-000203 9300 0104                     sts     cnt_seq+1, w
-000205 9543                          inc     pos
-000206 3045                          cpi     pos, 5
-000207 f008                          brlo    seq_ok
-000208 e041                          ldi     pos, 1
+00025e 2700                          clr     w
+00025f 9300 0103                     sts     cnt_seq,   w
+000261 9300 0104                     sts     cnt_seq+1, w
+000263 9543                          inc     pos
+000264 3045                          cpi     pos, 5
+000265 f008                          brlo    seq_ok
+000266 e041                          ldi     pos, 1
                                  seq_ok:
-000209 940e 0077                     call    update_leds
-00020b c042                          rjmp    check_heartbeat
+000267 940e 00a7                     call    update_leds
+000269 c042                          rjmp    check_heartbeat
                                  
                                  do_counter:
-00020c 9100 0109                     lds     w, ctr_val
-00020e 2300                          tst     w
-00020f f1f1                          breq    check_heartbeat
+00026a 9100 0109                     lds     w, ctr_val
+00026c 2300                          tst     w
+00026d f1f1                          breq    check_heartbeat
                                  
-000210 91a0 0107                     lds     r26, cnt_pulse
-000212 91b0 0108                     lds     r27, cnt_pulse+1
-000214 e001                          ldi     w, 1
-000215 0fa0                          add     r26, w
-000216 2700                          clr     w
-000217 1fb0                          adc     r27, w
-000218 93a0 0107                     sts     cnt_pulse,   r26
-00021a 93b0 0108                     sts     cnt_pulse+1, r27
+00026e 91a0 0107                     lds     r26, cnt_pulse
+000270 91b0 0108                     lds     r27, cnt_pulse+1
+000272 e001                          ldi     w, 1
+000273 0fa0                          add     r26, w
+000274 2700                          clr     w
+000275 1fb0                          adc     r27, w
+000276 93a0 0107                     sts     cnt_pulse,   r26
+000278 93b0 0108                     sts     cnt_pulse+1, r27
                                  
-00021c ec88                          ldi     r24, low(200)
-00021d e090                          ldi     r25, high(200)
-00021e 17a8                          cp      r26, r24
-00021f 07b9                          cpc     r27, r25
-000220 f430                          brsh    ctr_check_off
-000221 2f02                          mov     w, ledstate
-000222 7200                          andi    w, (1<<LEDBUILTIN)
-000223 600f                          ori     w, (1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
-000224 2f20                          mov     ledstate, w
-000225 b925                          out     PORTB, ledstate
-000226 c027                          rjmp    check_heartbeat
+00027a ec88                          ldi     r24, low(200)
+00027b e090                          ldi     r25, high(200)
+00027c 17a8                          cp      r26, r24
+00027d 07b9                          cpc     r27, r25
+00027e f430                          brsh    ctr_check_off
+00027f 2f02                          mov     w, ledstate
+000280 7200                          andi    w, (1<<LEDBUILTIN)
+000281 600f                          ori     w, (1<<LED1)|(1<<LED2)|(1<<LED3)|(1<<LED4)
+000282 2f20                          mov     ledstate, w
+000283 b925                          out     PORTB, ledstate
+000284 c027                          rjmp    check_heartbeat
                                  
                                  ctr_check_off:
-000227 e980                          ldi     r24, low(400)
-000228 e091                          ldi     r25, high(400)
-000229 17a8                          cp      r26, r24
-00022a 07b9                          cpc     r27, r25
-00022b f428                          brsh    ctr_next_pulse
-00022c 2f02                          mov     w, ledstate
-00022d 7200                          andi    w, (1<<LEDBUILTIN)
-00022e 2f20                          mov     ledstate, w
-00022f b925                          out     PORTB, ledstate
-000230 c01d                          rjmp    check_heartbeat
+000285 e980                          ldi     r24, low(400)
+000286 e091                          ldi     r25, high(400)
+000287 17a8                          cp      r26, r24
+000288 07b9                          cpc     r27, r25
+000289 f428                          brsh    ctr_next_pulse
+00028a 2f02                          mov     w, ledstate
+00028b 7200                          andi    w, (1<<LEDBUILTIN)
+00028c 2f20                          mov     ledstate, w
+00028d b925                          out     PORTB, ledstate
+00028e c01d                          rjmp    check_heartbeat
                                  
                                  ctr_next_pulse:
-000231 9100 010a                     lds     w, ctr_pulse
-000233 9503                          inc     w
-000234 9300 010a                     sts     ctr_pulse, w
-000236 9180 0109                     lds     r24, ctr_val
-000238 1708                          cp      w, r24
-000239 f070                          brlo    ctr_restart_pulse
+00028f 9100 010a                     lds     w, ctr_pulse
+000291 9503                          inc     w
+000292 9300 010a                     sts     ctr_pulse, w
+000294 9180 0109                     lds     r24, ctr_val
+000296 1708                          cp      w, r24
+000297 f070                          brlo    ctr_restart_pulse
                                  
-00023a e884                          ldi     r24, low(900)
-00023b e093                          ldi     r25, high(900)
-00023c 17a8                          cp      r26, r24
-00023d 07b9                          cpc     r27, r25
-00023e f408                          brsh    no_ctr_wait
-00023f c00e                          rjmp    check_heartbeat
+000298 e884                          ldi     r24, low(900)
+000299 e093                          ldi     r25, high(900)
+00029a 17a8                          cp      r26, r24
+00029b 07b9                          cpc     r27, r25
+00029c f408                          brsh    no_ctr_wait
+00029d c00e                          rjmp    check_heartbeat
                                  no_ctr_wait:
-000240 2700                          clr     w
-000241 9300 010a                     sts     ctr_pulse,   w
-000243 9300 0107                     sts     cnt_pulse,   w
-000245 9300 0108                     sts     cnt_pulse+1, w
-000247 c006                          rjmp    check_heartbeat
+00029e 2700                          clr     w
+00029f 9300 010a                     sts     ctr_pulse,   w
+0002a1 9300 0107                     sts     cnt_pulse,   w
+0002a3 9300 0108                     sts     cnt_pulse+1, w
+0002a5 c006                          rjmp    check_heartbeat
                                  
                                  ctr_restart_pulse:
-000248 2700                          clr     w
-000249 9300 0107                     sts     cnt_pulse,   w
-00024b 9300 0108                     sts     cnt_pulse+1, w
-00024d c000                          rjmp    check_heartbeat
+0002a6 2700                          clr     w
+0002a7 9300 0107                     sts     cnt_pulse,   w
+0002a9 9300 0108                     sts     cnt_pulse+1, w
+0002ab c000                          rjmp    check_heartbeat
                                  
                                      ;--- [10] Heartbeat ----------------------------------------------
                                  check_heartbeat:
-00024e 9bf1                          sbis    GPIOR0, BIT_100MS
-00024f cea4                          rjmp    loop
-000250 98f1                          cbi     GPIOR0, BIT_100MS
+0002ac 9bf1                          sbis    GPIOR0, BIT_100MS
+0002ad ce74                          rjmp    loop
+0002ae 98f1                          cbi     GPIOR0, BIT_100MS
                                  
-000251 91a0 0101                     lds     r26, cnt_hb
-000253 91b0 0102                     lds     r27, cnt_hb+1
-000255 e001                          ldi     w, 1
-000256 0fa0                          add     r26, w
-000257 2700                          clr     w
-000258 1fb0                          adc     r27, w
-000259 93a0 0101                     sts     cnt_hb,   r26
-00025b 93b0 0102                     sts     cnt_hb+1, r27
+0002af 91a0 0101                     lds     r26, cnt_hb
+0002b1 91b0 0102                     lds     r27, cnt_hb+1
+0002b3 e001                          ldi     w, 1
+0002b4 0fa0                          add     r26, w
+0002b5 2700                          clr     w
+0002b6 1fb0                          adc     r27, w
+0002b7 93a0 0101                     sts     cnt_hb,   r26
+0002b9 93b0 0102                     sts     cnt_hb+1, r27
                                  
-00025d 3033                          cpi     sysstate, STATE_COUNTER
-00025e f069                          breq    hb_counter
+0002bb 3033                          cpi     sysstate, STATE_COUNTER
+0002bc f069                          breq    hb_counter
                                  
-00025f 30a1                          cpi     r26, 1
-000260 f421                          brne    hb_check_off_normal
-000261 e200                          ldi     w, (1<<LEDBUILTIN)
-000262 2b20                          or      ledstate, w
-000263 b925                          out     PORTB, ledstate
-000264 c018                          rjmp    hb_check_reset
+0002bd 30a1                          cpi     r26, 1
+0002be f421                          brne    hb_check_off_normal
+0002bf e200                          ldi     w, (1<<LEDBUILTIN)
+0002c0 2b20                          or      ledstate, w
+0002c1 b925                          out     PORTB, ledstate
+0002c2 c018                          rjmp    hb_check_reset
                                  
                                  hb_check_off_normal:
-000265 30a2                          cpi     r26, 2
-000266 f4b1                          brne    hb_check_reset
-000267 2f02                          mov     w, ledstate
-000268 7d0f                          andi    w, ~(1<<LEDBUILTIN)
-000269 2f20                          mov     ledstate, w
-00026a b925                          out     PORTB, ledstate
-00026b c011                          rjmp    hb_check_reset
+0002c3 30a2                          cpi     r26, 2
+0002c4 f4b1                          brne    hb_check_reset
+0002c5 2f02                          mov     w, ledstate
+0002c6 7d0f                          andi    w, ~(1<<LEDBUILTIN)
+0002c7 2f20                          mov     ledstate, w
+0002c8 b925                          out     PORTB, ledstate
+0002c9 c011                          rjmp    hb_check_reset
                                  
                                  hb_counter:
-00026c 30a1                          cpi     r26, 1
-00026d f039                          breq    hb_on
-00026e 30a3                          cpi     r26, 3
-00026f f029                          breq    hb_on
-000270 30a2                          cpi     r26, 2
-000271 f039                          breq    hb_off
-000272 30a4                          cpi     r26, 4
-000273 f029                          breq    hb_off
-000274 c008                          rjmp    hb_check_reset
+0002ca 30a1                          cpi     r26, 1
+0002cb f039                          breq    hb_on
+0002cc 30a3                          cpi     r26, 3
+0002cd f029                          breq    hb_on
+0002ce 30a2                          cpi     r26, 2
+0002cf f039                          breq    hb_off
+0002d0 30a4                          cpi     r26, 4
+0002d1 f029                          breq    hb_off
+0002d2 c008                          rjmp    hb_check_reset
                                  
                                  hb_on:
-000275 e200                          ldi     w, (1<<LEDBUILTIN)
-000276 2b20                          or      ledstate, w
-000277 b925                          out     PORTB, ledstate
-000278 c004                          rjmp    hb_check_reset
+0002d3 e200                          ldi     w, (1<<LEDBUILTIN)
+0002d4 2b20                          or      ledstate, w
+0002d5 b925                          out     PORTB, ledstate
+0002d6 c004                          rjmp    hb_check_reset
                                  
                                  hb_off:
-000279 2f02                          mov     w, ledstate
-00027a 7d0f                          andi    w, ~(1<<LEDBUILTIN)
-00027b 2f20                          mov     ledstate, w
-00027c b925                          out     PORTB, ledstate
+0002d7 2f02                          mov     w, ledstate
+0002d8 7d0f                          andi    w, ~(1<<LEDBUILTIN)
+0002d9 2f20                          mov     ledstate, w
+0002da b925                          out     PORTB, ledstate
                                  
                                  hb_check_reset:
-00027d 31ae                          cpi     r26, HB_PERIOD
-00027e f408                          brsh    no_hb_reset
-00027f ce74                          rjmp    loop
+0002db 31ae                          cpi     r26, HB_PERIOD
+0002dc f408                          brsh    no_hb_reset
+0002dd ce44                          rjmp    loop
                                  no_hb_reset:
-000280 2700                          clr     w
-000281 9300 0101                     sts     cnt_hb,   w
-000283 9300 0102                     sts     cnt_hb+1, w
+0002de 2700                          clr     w
+0002df 9300 0101                     sts     cnt_hb,   w
+0002e1 9300 0102                     sts     cnt_hb+1, w
 
 
 RESOURCE USE INFORMATION
@@ -1806,40 +1921,40 @@ counted separately from r26..r31 here.
 .dseg memory usage only counts static data declared with .byte
 
 "ATmega328P" register use summary:
-x  :   0 y  :   0 z  :   0 r0 :   0 r1 :   1 r2 :   0 r3 :   0 r4 :   0 
+x  :  10 y  :   0 z  :   0 r0 :   0 r1 :   1 r2 :   0 r3 :   0 r4 :   0 
 r5 :   0 r6 :   0 r7 :   0 r8 :   0 r9 :   0 r10:   0 r11:   0 r12:   0 
-r13:   0 r14:   0 r15:   0 r16: 156 r17:  10 r18:  24 r19:  21 r20:  20 
-r21:   8 r22:   5 r23:   6 r24:  45 r25:  31 r26:  26 r27:  19 r28:  11 
+r13:   0 r14:   0 r15:   0 r16: 155 r17:  10 r18:  24 r19:  21 r20:  20 
+r21:   8 r22:   5 r23:   6 r24:  54 r25:  64 r26:  35 r27:  28 r28:  25 
 r29:   0 r30:   0 r31:   0 
-Registers used: 14 out of 35 (40.0%)
+Registers used: 15 out of 35 (42.9%)
 
 "ATmega328P" instruction use summary:
-.lds  :   0 .sts  :   0 adc   :   4 add   :   4 adiw  :   0 and   :   3 
-andi  :   8 asr   :   0 bclr  :   0 bld   :   0 brbc  :   0 brbs  :   0 
-brcc  :   0 brcs  :   0 break :   0 breq  :  36 brge  :   0 brhc  :   0 
-brhs  :   0 brid  :   0 brie  :   0 brlo  :   5 brlt  :   0 brmi  :   0 
-brne  :  16 brpl  :   0 brsh  :   6 brtc  :   0 brts  :   0 brvc  :   0 
+.lds  :   0 .sts  :   0 adc   :   5 add   :   8 adiw  :   0 and   :   3 
+andi  :  10 asr   :   0 bclr  :   0 bld   :   0 brbc  :   0 brbs  :   0 
+brcc  :   0 brcs  :   0 break :   0 breq  :  41 brge  :   0 brhc  :   0 
+brhs  :   0 brid  :   0 brie  :   0 brlo  :   8 brlt  :   0 brmi  :   0 
+brne  :  17 brpl  :   0 brsh  :   6 brtc  :   0 brts  :   0 brvc  :   0 
 brvs  :   0 bset  :   0 bst   :   0 call  :  14 cbi   :   2 cbr   :   0 
-clc   :   0 clh   :   0 cli   :   1 cln   :   0 clr   :  36 cls   :   0 
-clt   :   0 clv   :   0 clz   :   0 com   :   3 cp    :   7 cpc   :   6 
-cpi   :  52 cpse  :   0 dec   :   1 eor   :   0 fmul  :   0 fmuls :   0 
-fmulsu:   0 icall :   0 ijmp  :   0 in    :   3 inc   :   4 jmp   :   2 
-ld    :   0 ldd   :   0 ldi   :  66 lds   :  19 lpm   :   0 lsl   :   0 
-lsr   :   0 mov   :  15 movw  :   0 mul   :   0 muls  :   0 mulsu :   0 
-neg   :   0 nop   :   0 or    :   4 ori   :   1 out   :  17 pop   :   2 
-push  :   2 rcall :   0 ret   :  10 reti  :   1 rjmp  :  50 rol   :   0 
+clc   :   0 clh   :   0 cli   :   1 cln   :   0 clr   :  39 cls   :   0 
+clt   :   0 clv   :   0 clz   :   0 com   :   3 cp    :   9 cpc   :   6 
+cpi   :  57 cpse  :   0 dec   :   1 eor   :   0 fmul  :   0 fmuls :   0 
+fmulsu:   0 icall :   0 ijmp  :   0 in    :   4 inc   :   5 jmp   :  18 
+ld    :   9 ldd   :   0 ldi   :  78 lds   :  19 lpm   :   0 lsl   :   0 
+lsr   :   0 mov   :  17 movw  :   0 mul   :   0 muls  :   0 mulsu :   0 
+neg   :   0 nop   :   0 or    :   4 ori   :   1 out   :  18 pop   :   8 
+push  :   8 rcall :   0 ret   :  10 reti  :   2 rjmp  :  38 rol   :   0 
 ror   :   0 sbc   :   0 sbci  :   0 sbi   :   2 sbic  :   0 sbis  :   2 
-sbiw  :   0 sbr   :   0 sbrc  :   0 sbrs  :   5 sec   :   0 seh   :   0 
+sbiw  :   0 sbr   :   0 sbrc  :   0 sbrs  :   4 sec   :   0 seh   :   0 
 sei   :   1 sen   :   0 ser   :   0 ses   :   0 set   :   0 sev   :   0 
-sez   :   0 sleep :   0 spm   :   0 st    :   0 std   :   0 sts   :  75 
-sub   :   0 subi  :   1 swap  :   0 tst   :   2 wdr   :   0 
-Instructions used: 38 out of 113 (33.6%)
+sez   :   0 sleep :   0 spm   :   0 st    :   1 std   :   0 sts   :  77 
+sub   :   0 subi  :   5 swap  :   1 tst   :   4 wdr   :   0 
+Instructions used: 41 out of 113 (36.3%)
 
 "ATmega328P" memory use summary [bytes]:
 Segment   Begin    End      Code   Data   Used    Size   Use%
 ---------------------------------------------------------------
-[.cseg] 0x000000 0x00050c   1196      0   1196   32768   3.6%
-[.dseg] 0x000100 0x00010e      0     14     14    2048   0.7%
+[.cseg] 0x000000 0x0005c8   1388      0   1388   32768   4.2%
+[.dseg] 0x000100 0x000115      0     21     21    2048   1.0%
 [.eseg] 0x000000 0x000000      0      0      0    1024   0.0%
 
 Assembly complete, 0 errors, 0 warnings
